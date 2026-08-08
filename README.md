@@ -97,6 +97,25 @@ Das.Boot.1981.German.DL.1080p.BluRay.x264-SoW.mkv  /Volumes/Media/Movies
 
 `[i]` lets you paste a TMDB ID directly when the search is hopeless.
 
+### When you already know the id
+
+Some cases no heuristic can settle — a film released under a different title, or a TMDB entry
+added after the fact. `--id` sets it straight, with the same renaming, sidecar handling and
+undo logging as a normal run:
+
+```bash
+tmdbtag --id 64690 "Drive.1986.German-GRP.mkv"
+```
+
+An existing tag is replaced rather than appended to, and passing the id a file already carries
+does nothing.
+
+### Series mistaken for films
+
+TV mini-series often have no movie entry at all, so a plain search settles for the closest
+film and tags the wrong one. When no film matches convincingly, tmdbtag checks the TV index
+and says so instead of guessing — those files belong in your shows library, not here.
+
 ### Options
 
 | Flag | Effect |
@@ -110,6 +129,7 @@ Das.Boot.1981.German.DL.1080p.BluRay.x264-SoW.mkv  /Volumes/Media/Movies
 | `--verify` | Check existing `[tmdbid-…]` tags against the filename |
 | `--fix-nfo` | With `--verify`: move contradicting NFOs aside to `.nfo.bak` |
 | `--from-report` | Work through the deferred cases instead of rescanning |
+| `--id N` | Set this TMDB id directly, no search — replaces an existing tag |
 | `-y`, `--yes` | Never ask; always take the best match (risky on messy libraries) |
 | `--style clean` | Rename to `Title (Year) [tmdbid-N]` instead of keeping the release name |
 | `--folder` | Also tag the containing folder — skipped for folders holding several movies |
@@ -164,6 +184,7 @@ The interface is English. Set `TMDBTAG_LANG=de` for German output.
 - `sample` files and anything under `--min-size` are ignored.
 - Files that already carry a tag are skipped unless `--force`.
 - `--folder` refuses to rename directories containing more than one movie.
+- `--verify` reports the same TMDB id on several files — duplicate copies or a misfiled one.
 - Nothing is re-encoded or remuxed. Only names are touched.
 
 ## What it can't do
@@ -179,7 +200,7 @@ The interface is English. Set `TMDBTAG_LANG=de` for German output.
 python3 -m unittest discover -s tests -v
 ```
 
-100 tests, no network access (the TMDB client is stubbed), no dependencies.
+112 tests, no network access (the TMDB client is stubbed), no dependencies.
 
 ## Licence
 

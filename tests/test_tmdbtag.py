@@ -756,9 +756,10 @@ class TestParallelPrefetch(E2EBase):
             if key in self._cache:
                 return self._cache[key]
             if p.get("query"):
-                # volle Kombination: dieselbe Phrase mit anderem Jahr/anderer
-                # Sprache ist eine andere Anfrage, kein Duplikat
-                calls.append((p["query"], p.get("year"), p.get("language")))
+                # volle Kombination inklusive Endpunkt: dieselbe Phrase mit
+                # anderem Jahr, anderer Sprache oder gegen /search/tv ist eine
+                # andere Anfrage, kein Duplikat
+                calls.append((path, p["query"], p.get("year"), p.get("language")))
             self._cache[key] = real(self, path, **p)
             return self._cache[key]
 
@@ -1019,6 +1020,182 @@ class TestSafety(E2EBase):
             self.skipTest("keine Symlinks möglich")
         got = t.collect([str(lib)], 0, True)
         self.assertEqual(got, [], f"Symlink verfolgt: {got}")
+
+
+class TestSetId(E2EBase):
+    """--id für Fälle, die keine Heuristik lösen kann."""
+
+    def test_sets_the_tag_without_searching(self):
+        searched = []
+        real = t.Tmdb._get
+
+        def watch(self, path, **p):
+            if path == "/search/movie":
+                searched.append(p.get("query"))
+            if path.startswith("/movie/"):
+                return {"id": 64690, "title": "Drive", "original_title": "Drive",
+                        "release_date": "2011-09-16", "runtime": 100}
+            return real(self, path, **p)
+
+        t.Tmdb._get = watch
+        try:
+            self.run_cli("--id", "64690", str(self.make("f/Drive.1986.German-GRP.mkv")))
+        finally:
+            t.Tmdb._get = real
+        self.assertEqual(searched, [], "hat trotzdem gesucht")
+        self.assertIn("f/Drive.1986.German-GRP [tmdbid-64690].mkv", self.names())
+
+    def test_replaces_an_existing_tag(self):
+        real = t.Tmdb._get
+
+        def details(self, path, **p):
+            if path.startswith("/movie/"):
+                return {"id": 901121, "title": "Spider Web", "runtime": 135}
+            return real(self, path, **p)
+
+        t.Tmdb._get = details
+        try:
+            self.run_cli("--id", "901121",
+                         str(self.make("f/Spider.Web.2023-GRP [tmdbid-1173580].mkv")))
+        finally:
+            t.Tmdb._get = real
+        got = self.names()
+        self.assertIn("f/Spider.Web.2023-GRP [tmdbid-901121].mkv", got)
+        self.assertNotIn("f/Spider.Web.2023-GRP [tmdbid-1173580].mkv", got)
+        # kein doppelter Tag im Namen
+        self.assertEqual(sum("tmdbid" in n for n in got), 1)
+
+    def test_same_id_is_a_no_op(self):
+        """Sonst hängt unique_path ein ' (2)' an, obwohl nichts zu tun ist."""
+        v = self.make("f/Drive.1986.German-GRP [tmdbid-64690].mkv")
+        real = t.Tmdb._get
+        t.Tmdb._get = lambda s, path, **p: (
+            {"id": 64690, "title": "Drive", "runtime": 100}
+            if path.startswith("/movie/") else real(s, path, **p))
+        try:
+            self.run_cli("--id", "64690", str(v))
+        finally:
+            t.Tmdb._get = real
+        self.assertEqual(self.names(), ["f", "f/Drive.1986.German-GRP [tmdbid-64690].mkv"])
+
+    def test_sidecars_do_not_collect_a_second_tag(self):
+        """Regression: der alte Tag steckte auch im Sidecar-Rest und wurde
+        an den neuen angehängt."""
+        v = self.make("f/Drive.1986.German-GRP [tmdbid-1].mkv")
+        (v.parent / "Drive.1986.German-GRP [tmdbid-1].ger.srt").write_text("x")
+        real = t.Tmdb._get
+        t.Tmdb._get = lambda s, path, **p: (
+            {"id": 64690, "title": "Drive", "runtime": 100}
+            if path.startswith("/movie/") else real(s, path, **p))
+        try:
+            self.run_cli("--id", "64690", str(v))
+        finally:
+            t.Tmdb._get = real
+        for n in self.names():
+            self.assertLessEqual(n.count("tmdbid"), 1, f"doppelter Tag: {n}")
+        self.assertIn("f/Drive.1986.German-GRP [tmdbid-64690].ger.srt", self.names())
+
+    def test_strip_tag_closes_the_gap(self):
+        self.assertEqual(t.strip_tag("Film.2000-GRP [tmdbid-1]"), "Film.2000-GRP")
+        self.assertEqual(t.strip_tag(" [tmdbid-1].ger.srt"), ".ger.srt")
+        self.assertEqual(t.strip_tag("A [tmdbid-1] [imdbid-tt7] B"), "A B")
+
+    def test_renames_sidecars_too(self):
+        v = self.make("f/Drive.1986.German-GRP.mkv")
+        (v.parent / "Drive.1986.German-GRP.ger.srt").write_text("x")
+        real = t.Tmdb._get
+        t.Tmdb._get = lambda s, path, **p: (
+            {"id": 64690, "title": "Drive", "runtime": 100}
+            if path.startswith("/movie/") else real(s, path, **p))
+        try:
+            self.run_cli("--id", "64690", str(v))
+        finally:
+            t.Tmdb._get = real
+        self.assertIn("f/Drive.1986.German-GRP [tmdbid-64690].ger.srt", self.names())
+
+    def test_dry_run_changes_nothing(self):
+        v = self.make("f/Drive.1986.German-GRP.mkv")
+        before = self.names()
+        real = t.Tmdb._get
+        t.Tmdb._get = lambda s, path, **p: (
+            {"id": 64690, "title": "Drive", "runtime": 100}
+            if path.startswith("/movie/") else real(s, path, **p))
+        try:
+            self.run_cli("--id", "64690", "-n", str(v))
+        finally:
+            t.Tmdb._get = real
+        self.assertEqual(before, self.names())
+
+    def test_unknown_id_is_refused(self):
+        real = t.Tmdb._get
+        t.Tmdb._get = lambda s, path, **p: ({} if path.startswith("/movie/")
+                                            else real(s, path, **p))
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                self.run_cli("--id", "999999999", str(self.make("f/X.2000-GRP.mkv")))
+        finally:
+            t.Tmdb._get = real
+        self.assertIn("does not exist", str(cm.exception))
+
+
+class TestTvHint(E2EBase):
+    """Miniserien haben oft keinen Film-Eintrag — dann darf nicht der
+    ähnlichste Film getaggt werden."""
+
+    def test_reports_a_series_instead_of_guessing_a_film(self):
+        real = t.Tmdb._get
+
+        def with_tv(self, path, **p):
+            if path == "/search/tv":
+                return {"results": [{"id": 19614, "name": "Es",
+                                     "original_name": "It",
+                                     "first_air_date": "1990-11-18"}]}
+            if path == "/search/movie":
+                return {"results": []}
+            return real(self, path, **p)
+
+        t.Tmdb._get = with_tv
+        try:
+            self.make("f/Es.1990.German.DL.1080p.BluRay.x264-GRP.mkv")
+            _, out = self.run_cli("--batch", str(self.tmp))
+        finally:
+            t.Tmdb._get = real
+        self.assertIn("TV series #19614", out)
+        self.assertIn("shows library", out)
+        rows = [json.loads(l) for l in
+                (t.CONFIG_DIR / "offen.jsonl").read_text().splitlines() if l.strip()]
+        self.assertIn("19614", rows[0]["reason"])
+
+    def test_no_tv_lookup_when_the_film_matches(self):
+        calls = []
+        real = t.Tmdb._get
+
+        def watch(self, path, **p):
+            calls.append(path)
+            return real(self, path, **p)
+
+        t.Tmdb._get = watch
+        try:
+            self.make("f/Das.Boot.1981.German.1080p.BluRay.x264-SoW.mkv")
+            self.run_cli("--batch", str(self.tmp))
+        finally:
+            t.Tmdb._get = real
+        self.assertNotIn("/search/tv", calls, "unnötige TV-Suche")
+
+
+class TestDuplicateIds(E2EBase):
+    def test_verify_reports_the_same_id_on_two_files(self):
+        self.make("f/Das.Boot.1981.German.1080p-SoW [tmdbid-387].mkv")
+        self.make("f/Das.Boot.1981.German.2160p-UHD [tmdbid-387].mkv")
+        _, out = self.run_cli("--verify", str(self.tmp))
+        self.assertIn("1 duplicate id(s)", out)
+        self.assertIn("id 387 on 2 files", out)
+
+    def test_no_false_alarm_for_distinct_ids(self):
+        self.make("f/Das.Boot.1981.German.1080p-SoW [tmdbid-387].mkv")
+        self.make("f/The.Matrix.1999.German.1080p-GRP [tmdbid-603].mkv")
+        _, out = self.run_cli("--verify", str(self.tmp))
+        self.assertNotIn("duplicate", out)
 
 
 class TestNfo(E2EBase):

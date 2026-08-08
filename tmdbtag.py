@@ -145,6 +145,15 @@ _DE = {
     "No tagged files found.": "Keine getaggten Dateien gefunden.",
     "checking {n} tagged files": "{n} getaggte Dateien werden geprüft",
     "id {mid} does not exist on TMDB": "ID {mid} existiert auf TMDB nicht",
+    "no film, but TV series #{id} \"{name}\" — belongs in the shows library":
+        "kein Film, aber TV-Serie #{id} \"{name}\" — gehört in die Serien-Bibliothek",
+    "TV series #{id}, not a film": "TV-Serie #{id}, kein Film",
+    "{n} duplicate id(s)": "{n} doppelt vergebene ID(s)",
+    "   id {mid} on {n} files": "   ID {mid} auf {n} Dateien",
+    "set this TMDB id on the given files directly, without searching "
+    "(replaces an existing tag)":
+        "diese TMDB-ID direkt auf die Dateien setzen, ohne Suche "
+        "(ersetzt einen vorhandenen Tag)",
     "id {mid} unknown": "ID {mid} unbekannt",
     "NFO overrides the filename: {nfo_id} vs {file_id}":
         "NFO schlägt den Dateinamen: {nfo_id} statt {file_id}",
@@ -355,6 +364,11 @@ class Tmdb:
 
     def details(self, movie_id: int) -> dict:
         return self._get(f"/movie/{movie_id}", language=self.lang)
+
+    def search_tv(self, query: str, year: int | None) -> list[dict]:
+        data = self._get("/search/tv", query=query, first_air_date_year=year,
+                         language=self.lang)
+        return data.get("results", []) or []
 
 
 # --------------------------------------------------------------------------- #
@@ -672,6 +686,22 @@ def choose(cands: list[dict], title: str, year: int | None,
             info("   " + green(prefix) + fmt_result(top).split("\n")[0])
             return top
 
+    def tv_hint() -> dict | None:
+        """Gibt es den Titel als Serie statt als Film?
+
+        Miniserien haben oft gar keinen Film-Eintrag. Ohne diesen Hinweis
+        greift die Suche zum ähnlichsten Film und tagt den falschen.
+        """
+        try:
+            shows = tmdb.search_tv(title, year)
+        except (TmdbUnavailable, AttributeError):
+            return None
+        for sh in shows[:3]:
+            name = sh.get("name") or sh.get("original_name") or ""
+            if title_agrees(title, name) or title_agrees(title, sh.get("original_name") or ""):
+                return sh
+        return None
+
     def defer(reason: str):
         """Unsicheren Fall für die spätere Nachbearbeitung vormerken."""
         if unresolved is not None and video is not None:
@@ -682,6 +712,14 @@ def choose(cands: list[dict], title: str, year: int | None,
             })
 
     if mode == "batch":
+        if not ranked or score(ranked[0], title, year) < 0.60:
+            sh = tv_hint()
+            if sh:
+                info("   " + yellow(_("no film, but TV series #{id} \"{name}\" — "
+                                      "belongs in the shows library")
+                                    .format(id=sh["id"], name=sh.get("name"))))
+                defer(_("TV series #{id}, not a film").format(id=sh["id"]))
+                return None
         if ranked:
             best = fmt_result(ranked[0]).split("\n")[0]
             info("   " + yellow(_("uncertain → deferred: ")) + dim(best))
@@ -698,6 +736,11 @@ def choose(cands: list[dict], title: str, year: int | None,
 
     if not ranked:
         info("   " + yellow(_("no TMDB match")))
+        sh = tv_hint()
+        if sh:
+            info("   " + yellow(_("no film, but TV series #{id} \"{name}\" — "
+                                  "belongs in the shows library")
+                                .format(id=sh["id"], name=sh.get("name"))))
     else:
         info("   " + bold(_("Matches:")))
         for i, r in enumerate(ranked[:6], 1):
@@ -1155,6 +1198,113 @@ def read_report(path: Path) -> list[Path]:
     return out
 
 
+def strip_tag(text: str) -> str:
+    """Vorhandene [tmdbid-…]/[imdbid-…] entfernen und Lücken schließen."""
+    out = re.sub(r"\[imdbid-tt\d+\]", "", TAG_RE.sub("", text), flags=re.I)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
+def apply_tag(f: Path, movie: dict, imdb: str | None, args, roots: set,
+              retag: bool = False) -> Path:
+    """Datei, Beifänger und ggf. Ordner auf den Tag umbenennen.
+
+    Gemeinsamer Weg für den normalen Lauf und für --id, damit eine direkt
+    gesetzte ID exakt dieselbe Benennung, Protokollierung und Trockenlauf-
+    Behandlung bekommt wie eine gesuchte.
+    """
+    tag = build_tag(movie["id"], imdb)
+    video_after = f
+
+    if args.rename:
+        renames: list[tuple[Path, Path]] = []
+        # Beim Neu-Taggen den alten Tag gleich beim Namensbau entfernen, statt
+        # erst umzubenennen und dann nochmal — sonst tragen die Beifänger den
+        # alten Tag doppelt, und das Ziel kollidiert mit sich selbst.
+        base = strip_tag(f.stem) if retag else f.stem
+        target_stem = new_stem(base, movie, tag, args.style)
+        dst = f.with_name(target_stem + f.suffix)
+        renames.append((f, dst if dst == f else unique_path(dst)))
+
+        if args.sidecars:
+            for sc in sidecars(f):
+                rest = sidecar_rest(f, sc)              # ".ger.forced.srt"
+                if retag:
+                    rest = strip_tag(rest)
+                sc_dst = sc.with_name(target_stem + rest)
+                renames.append((sc, sc_dst if sc_dst == sc else unique_path(sc_dst)))
+
+        folder_src = None
+        if args.folder:
+            d = f.parent
+            # nur echte Einzelfilm-Ordner anfassen, keine Sammelordner
+            solo = sum(1 for x in d.iterdir()
+                       if x.is_file() and x.suffix.lower() in VIDEO_EXT
+                       and "sample" not in x.name.lower()) == 1
+            if solo and d not in roots and d != d.parent and not TAG_RE.search(d.name):
+                if args.style == "clean":
+                    t = movie.get("title") or movie.get("original_title") or d.name
+                    y = year_of(movie)
+                    dn = sanitize(f"{t} ({y}) {tag}" if y else f"{t} {tag}")
+                else:
+                    dn = sanitize(f"{d.name} {tag}")
+                folder_src = d
+                renames.append((d, unique_path(d.with_name(dn))))
+
+        # Dateien zuerst, Ordner zuletzt — sonst zeigen die Dateipfade ins Leere
+        for src, dst in renames:
+            if src == dst:
+                continue
+            info(f"   {green('→')} {dst.name}")
+            if args.dry_run:
+                if src == f:
+                    video_after = dst
+                continue
+            try:
+                src.rename(dst)
+                # Sofort protokollieren, nicht erst am Ende: sonst ist nach
+                # einem Ctrl-C mitten im Lauf nichts mehr rückgängig zu machen.
+                log_rename([(str(src), str(dst))])
+                if src == f:
+                    video_after = dst
+                elif src == folder_src:
+                    video_after = dst / video_after.name
+            except OSError as e:
+                err(_("   rename failed: {e}").format(e=e))
+
+    if args.nfo:
+        write_nfo(video_after, movie, imdb, args.dry_run, args.force)
+    return video_after
+
+
+def set_id(tmdb: Tmdb, files: list[Path], movie_id: int, args, roots: set) -> int:
+    """Eine bekannte TMDB-ID direkt setzen, ohne Suche.
+
+    Für Fälle, die keine Heuristik lösen kann: Film unter anderem Titel
+    veröffentlicht, TMDB-Eintrag erst nachträglich angelegt, oder eine
+    Zuordnung, die man von Hand recherchiert hat.
+    """
+    try:
+        movie = tmdb.details(movie_id)
+    except TmdbUnavailable as e:
+        raise SystemExit(_("   TMDB unreachable: {e} → skipped").format(e=e))
+    if not movie:
+        raise SystemExit(_("id {mid} does not exist on TMDB").format(mid=movie_id))
+
+    imdb = movie.get("imdb_id") if args.imdb else None
+    info(bold(f"#{movie_id}  {movie.get('title')} "
+              f"({year_of(movie) or '?'}, {movie.get('runtime') or '?'} min)") + "\n")
+
+    for f in files:
+        info(bold(f.name))
+        apply_tag(f, movie, imdb, args, roots, retag=True)
+        info("")
+
+    info(bold(_("Done: ") + _("{n} tagged").format(n=len(files)))
+         + (dim(_("  (dry run)")) if args.dry_run else ""))
+    return 0
+
+
+
 def disable_nfo(nfo: Path, dry: bool) -> Path | None:
     """Eine widersprechende NFO beiseiteschieben statt löschen.
 
@@ -1190,7 +1340,9 @@ def verify(tmdb: Tmdb, files: list[Path], report: Path | None,
     info(bold(_("checking {n} tagged files").format(n=len(tagged))) + "\n")
     suspect: list[dict] = []
     fixed: list[str] = []
+    by_id: dict[int, list[str]] = {}
     for idx, (f, mid) in enumerate(tagged, 1):
+        by_id.setdefault(mid, []).append(f.name)
         # Zuerst die NFO: sie schlägt den Dateinamen, also nützt ein korrekter
         # Tag nichts, solange daneben eine NFO mit anderer ID liegt.
         nfo = nfo_tmdb_id(f)
@@ -1255,6 +1407,19 @@ def verify(tmdb: Tmdb, files: list[Path], report: Path | None,
         elif idx % 25 == 0:
             info(dim(_("   … {idx}/{total} checked, {n} suspect")
                     .format(idx=idx, total=len(tagged), n=len(suspect))))
+
+    dupes = {i: names for i, names in by_id.items() if len(names) > 1}
+    if dupes:
+        info("")
+        info(bold(yellow(_("{n} duplicate id(s)").format(n=len(dupes)))))
+        for i, names in list(dupes.items())[:10]:
+            info("   " + yellow(_("   id {mid} on {n} files")
+                                .format(mid=i, n=len(names))))
+            for nm in names:
+                info("      " + dim(nm[:76]))
+            suspect.append({"file": names[0],
+                            "reason": _("   id {mid} on {n} files")
+                            .format(mid=i, n=len(names))})
 
     info("")
     if fixed:
@@ -1328,6 +1493,9 @@ Set TMDBTAG_LANG=de for German output.
                            "(default: ~/.config/tmdbtag/offen.jsonl)"))
     ap.add_argument("--from-report", action="store_true",
                     help=_("work through the files listed in the report instead of rescanning"))
+    ap.add_argument("--id", type=int, metavar="N",
+                    help=_("set this TMDB id on the given files directly, without "
+                           "searching (replaces an existing tag)"))
     ap.add_argument("--verify", action="store_true",
                     help=_("check existing [tmdbid-…] tags against the filename"))
     ap.add_argument("--fix-nfo", action="store_true",
@@ -1396,6 +1564,10 @@ Set TMDBTAG_LANG=de for German output.
 
     if args.verify:
         return verify(tmdb, files, report_path, args.fix_nfo, args.dry_run)
+
+    if args.id:
+        return set_id(tmdb, files, args.id,
+                      args, {Path(p).expanduser().resolve() for p in args.paths})
 
     mode = ("yes" if args.yes else "batch" if args.batch
             else "auto" if args.auto else "ask")
@@ -1474,61 +1646,7 @@ Set TMDBTAG_LANG=de for German output.
             info("")
             continue
 
-        tag = build_tag(movie["id"], imdb)
-
-        video_after = f
-        if args.rename:
-            renames: list[tuple[Path, Path]] = []
-            target_stem = new_stem(f.stem, movie, tag, args.style)
-            video_dst = unique_path(f.with_name(target_stem + f.suffix))
-            renames.append((f, video_dst))
-
-            if args.sidecars:
-                for sc in sidecars(f):
-                    rest = sidecar_rest(f, sc)           # ".ger.forced.srt"
-                    renames.append((sc, unique_path(sc.with_name(target_stem + rest))))
-
-            folder_src = folder_dst = None
-            if args.folder:
-                d = f.parent
-                # nur echte Einzelfilm-Ordner anfassen, keine Sammelordner
-                solo = sum(1 for x in d.iterdir()
-                           if x.is_file() and x.suffix.lower() in VIDEO_EXT
-                           and "sample" not in x.name.lower()) == 1
-                if solo and d not in roots and d != d.parent and not TAG_RE.search(d.name):
-                    if args.style == "clean":
-                        t = movie.get("title") or movie.get("original_title") or d.name
-                        y = year_of(movie)
-                        dn = sanitize(f"{t} ({y}) {tag}" if y else f"{t} {tag}")
-                    else:
-                        dn = sanitize(f"{d.name} {tag}")
-                    folder_src, folder_dst = d, unique_path(d.with_name(dn))
-                    renames.append((folder_src, folder_dst))
-
-            # Dateien zuerst, Ordner zuletzt — sonst zeigen die Dateipfade ins Leere
-            for src, dst in renames:
-                if src == dst:
-                    continue
-                info(f"   {green('→')} {dst.name}")
-                if args.dry_run:
-                    if src == f:
-                        video_after = dst
-                    continue
-                try:
-                    src.rename(dst)
-                    # Sofort protokollieren, nicht erst am Ende: sonst ist nach
-                    # einem Ctrl-C mitten im Lauf nichts mehr rückgängig zu machen.
-                    log_rename([(str(src), str(dst))])
-                    if src == f:
-                        video_after = dst
-                    elif src == folder_src:
-                        video_after = dst / video_after.name
-                except OSError as e:
-                    err(_("   rename failed: {e}").format(e=e))
-
-        if args.nfo:
-            write_nfo(video_after, movie, imdb, args.dry_run, args.force)
-
+        apply_tag(f, movie, imdb, args, roots)
         done += 1
         info("")
 
