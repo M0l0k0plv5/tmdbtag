@@ -120,7 +120,9 @@ The.Prestige.2006.German.AC3.1080p.BluRay.x265-GTF [tmdbid-1124].mkv
 ```
 
 `✓` marks a runtime within 6 minutes, `←` the id the file already carries. Paths pasted by
-the terminal are unescaped for you, backslashes and quotes alike.
+the terminal are unescaped for you — backslashes, quotes, or none at all if you copied the
+path from Finder. Drag the `.nfo` or a subtitle by mistake and it switches to the video file
+they belong to, rather than renaming the sidecar on its own.
 
 ### When you already know the id
 
@@ -226,7 +228,7 @@ The interface is English. Set `TMDBTAG_LANG=de` for German output.
 python3 -m unittest discover -s tests -v
 ```
 
-122 tests, no network access (the TMDB client is stubbed), no dependencies.
+128 tests, no network access (the TMDB client is stubbed), no dependencies.
 
 ## Licence
 

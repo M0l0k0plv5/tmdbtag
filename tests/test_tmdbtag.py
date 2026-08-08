@@ -1213,6 +1213,56 @@ class TestDragAndInspect(E2EBase):
             with self.subTest(raw=raw):
                 self.assertEqual(str(t.unquote_path(raw)), want)
 
+    def test_dragging_a_sidecar_uses_the_video(self):
+        """Im Finder liegen .nfo und .mkv nebeneinander — wer die NFO zieht,
+        meint den Film. Sonst würde die NFO selbst umbenannt."""
+        v = self.make("f/Drive.2011.German-GRP [tmdbid-64690].mkv")
+        nfo = v.with_suffix(".nfo")
+        nfo.write_text("<movie><tmdbid>64690</tmdbid><runtime>97</runtime></movie>")
+        with mock.patch("builtins.input", side_effect=[str(nfo), "s", "q"]), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            _, out = self.run_cli("--inspect")
+        self.assertIn("using Drive.2011.German-GRP [tmdbid-64690].mkv instead", out)
+
+    def test_sidecar_as_argument_resolves_too(self):
+        v = self.make("f/Das.Boot.1981.German-SoW.mkv")
+        srt = v.with_suffix(".ger.srt")
+        srt.write_text("x")
+        with mock.patch("builtins.input", return_value="1"), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            self.run_cli("--inspect", str(srt))
+        got = self.names()
+        self.assertIn("f/Das.Boot.1981.German-SoW [tmdbid-387].mkv", got)
+        self.assertIn("f/Das.Boot.1981.German-SoW [tmdbid-387].ger.srt", got)
+
+    def test_lone_non_video_is_refused(self):
+        stray = self.tmp / "f" / "notizen.txt"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("x")
+        with mock.patch("builtins.input", side_effect=[str(stray), "q"]), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            _, out = self.run_cli("--inspect")
+        self.assertIn("not a video file", out)
+
+    def test_resolve_video_picks_the_longest_matching_stem(self):
+        d = self.tmp / "f"
+        d.mkdir(exist_ok=True)
+        (d / "Film.mkv").write_bytes(b"x")
+        (d / "Film.2011.German.mkv").write_bytes(b"x")
+        sc = d / "Film.2011.German.ger.srt"
+        sc.write_text("x")
+        self.assertEqual(t.resolve_video(sc).name, "Film.2011.German.mkv")
+
+    def test_resolve_video_passes_videos_through(self):
+        v = self.make("f/Film.2011.mkv", 10)
+        self.assertEqual(t.resolve_video(v), v)
+
+    def test_unescaped_path_with_spaces_is_taken_literally(self):
+        """Aus dem Finder kopierte Pfade tragen keine Escapes — shlex würde
+        sie am Leerzeichen zerschneiden."""
+        v = self.make("f/Some Film 2011 [tmdbid-1].mkv", 10)
+        self.assertEqual(t.unquote_path(str(v)), v)
+
     def test_unquote_survives_unbalanced_quotes(self):
         self.assertIsNotNone(t.unquote_path('/a/it\'s a film.mkv'))
 

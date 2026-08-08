@@ -148,6 +148,9 @@ _DE = {
     "id {mid} does not exist on TMDB": "ID {mid} existiert auf TMDB nicht",
     "{size:.2f} GB, {mins} min": "{size:.2f} GB, {mins} min",
     "NFO agrees (#{id})": "NFO stimmt überein (#{id})",
+    "not a video file, and no matching one alongside: {p}":
+        "keine Videodatei, und daneben liegt keine passende: {p}",
+    "   using {name} instead": "   nehme stattdessen {name}",
     "   tag it? number / [s]kip / [q]uit: ":
         "   taggen? Nummer / [s]kip / [q]uit: ",
     "Drag a file into the terminal and press Enter. [q] quits.":
@@ -1110,6 +1113,29 @@ def log_rename(entries: list[tuple[str, str]]):
 # Sammeln
 # --------------------------------------------------------------------------- #
 
+def resolve_video(p: Path) -> Path | None:
+    """Zur Videodatei auflösen, wenn ein Beifänger übergeben wurde.
+
+    Im Finder liegen .nfo, .srt und .mkv nebeneinander; wer eine davon ins
+    Terminal zieht, meint immer den Film. Ohne diese Umleitung würde der
+    Beifänger selbst umbenannt und der Film bliebe unangetastet.
+    """
+    if p.suffix.lower() in VIDEO_EXT:
+        return p
+    name = nfc(p.name)
+    best = None
+    try:
+        for v in p.parent.iterdir():
+            if (v.suffix.lower() in VIDEO_EXT and not v.name.startswith("._")
+                    and name.startswith(nfc(v.stem))):
+                # längster passender Stamm gewinnt, falls mehrere greifen
+                if best is None or len(v.stem) > len(best.stem):
+                    best = v
+    except OSError:
+        return None
+    return best
+
+
 def collect(paths: list[str], min_size: int, recursive: bool) -> list[Path]:
     out: list[Path] = []
     seen = 0
@@ -1120,7 +1146,14 @@ def collect(paths: list[str], min_size: int, recursive: bool) -> list[Path]:
             warn(_("not found: {p}").format(p=p))
             continue
         if p.is_file():
-            out.append(p.resolve())
+            v = resolve_video(p)
+            if v is None:
+                warn(_("not a video file, and no matching one alongside: {p}")
+                     .format(p=p.name))
+                continue
+            if v != p:
+                info(dim(_("   using {name} instead").format(name=v.name)))
+            out.append(v.resolve())
             continue
         it = p.rglob("*") if recursive else p.glob("*")
         for f in it:
@@ -1296,6 +1329,11 @@ def unquote_path(text: str) -> Path | None:
     text = text.strip()
     if not text:
         return None
+    # Zuerst wörtlich nehmen: aus dem Finder kopierte Pfade tragen keine
+    # Escapes, und shlex würde sie am Leerzeichen zerschneiden.
+    literal = Path(text.strip("'\"")).expanduser()
+    if literal.exists():
+        return literal
     try:
         parts = shlex.split(text)
         if parts:
@@ -1418,6 +1456,14 @@ def drag_loop(tmdb: Tmdb, args) -> int:
         if f.is_dir():
             warn(_("that is a directory — pass it as an argument instead"))
             continue
+        v = resolve_video(f)
+        if v is None:
+            warn(_("not a video file, and no matching one alongside: {p}")
+                 .format(p=f.name))
+            continue
+        if v != f:
+            info(dim(_("   using {name} instead").format(name=v.name)))
+        f = v
         try:
             if inspect(tmdb, f, args, {f.parent}):
                 done += 1
