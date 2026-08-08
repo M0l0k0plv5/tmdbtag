@@ -1343,6 +1343,45 @@ class TestDragAndInspect(E2EBase):
                       self.names())
 
 
+class TestMultiPart(E2EBase):
+    """Ein Film auf zwei Dateien: beide tragen dieselbe ID, zu Recht."""
+
+    def test_split_part_recognises_the_usual_forms(self):
+        for stem, base, part in [
+            ("Film.2000.German-GRP.CD1", "Film.2000.German-GRP", 1),
+            ("Film.2000.German-GRP.cd2", "Film.2000.German-GRP", 2),
+            ("Film 2000 - part1", "Film 2000", 1),
+            ("Film.2000.Teil2", "Film.2000", 2),
+            ("Film.2000.disc1.German", "Film.2000.German", 1),
+        ]:
+            with self.subTest(stem=stem):
+                self.assertEqual(t.split_part(stem), (base, part))
+
+    def test_split_part_leaves_normal_names_alone(self):
+        for stem in ["Das.Boot.1981.German-SoW", "Ocean's 11", "Terminator 2"]:
+            self.assertEqual(t.split_part(stem), (stem, None))
+
+    def test_both_parts_get_the_tag_and_a_part_suffix(self):
+        for n in (1, 2):
+            self.make(f"f/Das.Boot.1981.German.1080p-SoW.CD{n}.mkv")
+        self.run_cli("--batch", str(self.tmp))
+        got = self.names()
+        self.assertIn("f/Das.Boot.1981.German.1080p-SoW [tmdbid-387] - part1.mkv", got)
+        self.assertIn("f/Das.Boot.1981.German.1080p-SoW [tmdbid-387] - part2.mkv", got)
+
+    def test_verify_does_not_call_two_parts_a_duplicate(self):
+        for n in (1, 2):
+            self.make(f"f/Das.Boot.1981-SoW [tmdbid-387] - part{n}.mkv")
+        _, out = self.run_cli("--verify", str(self.tmp))
+        self.assertNotIn("duplicate", out)
+
+    def test_verify_still_reports_a_real_duplicate(self):
+        self.make("f/Das.Boot.1981.German.1080p-SoW [tmdbid-387].mkv")
+        self.make("f/Das.Boot.1981.German.2160p-UHD [tmdbid-387].mkv")
+        _, out = self.run_cli("--verify", str(self.tmp))
+        self.assertIn("duplicate", out)
+
+
 class TestNfo(E2EBase):
     def test_nfo_written_next_to_video(self):
         d = "Das.Boot.1981.German.1080p.BluRay.x264-SoW"

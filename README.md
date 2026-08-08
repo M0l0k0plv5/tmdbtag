@@ -152,7 +152,7 @@ and says so instead of guessing — those files belong in your shows library, no
 | `--batch` | Never prompt: tag confident hits, write the rest to a report |
 | `--report` | Where that report goes (default `~/.config/tmdbtag/offen.jsonl`) |
 | `--timeout` | Seconds per TMDB request, default 15 |
-| `--workers` | Parallel TMDB lookups up front, default 6 (`1` disables) |
+| `--workers` | Parallel TMDB lookups up front, default 6 (`1` disables) — also speeds up `--verify` |
 | `--verify` | Check existing `[tmdbid-…]` tags against the filename |
 | `--fix-nfo` | With `--verify`: move contradicting NFOs aside to `.nfo.bak` |
 | `--from-report` | Work through the deferred cases instead of rescanning |
@@ -213,6 +213,9 @@ The interface is English. Set `TMDBTAG_LANG=de` for German output.
 - Files that already carry a tag are skipped unless `--force`.
 - `--folder` refuses to rename directories containing more than one movie.
 - `--verify` reports the same TMDB id on several files — duplicate copies or a misfiled one.
+  Genuine two-parters are recognised and not flagged.
+- A movie split across two files (`…CD1.mkv`, `…CD2.mkv`) is renamed to Jellyfin's
+  `… [tmdbid-N] - part1` form, so both halves stay one film.
 - Nothing is re-encoded or remuxed. Only names are touched.
 
 ## What it can't do
@@ -228,7 +231,7 @@ The interface is English. Set `TMDBTAG_LANG=de` for German output.
 python3 -m unittest discover -s tests -v
 ```
 
-128 tests, no network access (the TMDB client is stubbed), no dependencies.
+133 tests, no network access (the TMDB client is stubbed), no dependencies.
 
 ## Licence
 

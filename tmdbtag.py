@@ -559,6 +559,36 @@ def prefetch(tmdb: Tmdb, files: list[Path], workers: int) -> None:
         print("\r" + " " * 46 + "\r", end="", flush=True)
 
 
+def prefetch_details(tmdb: Tmdb, ids: list[int], workers: int) -> None:
+    """Filmdetails für bekannte IDs vorab parallel in den Cache holen.
+
+    --verify braucht je Datei genau eine Detailabfrage; nacheinander
+    dominiert das die Laufzeit einer Prüfung über tausende Dateien.
+    """
+    if workers < 2 or len(ids) < 4:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    done = 0
+    show = sys.stdout.isatty()
+    uniq = list(dict.fromkeys(ids))
+
+    def warm(mid: int):
+        try:
+            tmdb.details(mid)
+        except TmdbUnavailable:
+            pass          # der Hauptlauf meldet den Fehler an der richtigen Stelle
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for _unused in pool.map(warm, uniq):
+            done += 1
+            if show and done % 10 == 0:
+                print(dim(_("\r   querying TMDB … {done}/{total}")
+                          .format(done=done, total=len(uniq))), end="", flush=True)
+    if show:
+        print("\r" + " " * 46 + "\r", end="", flush=True)
+
+
 def find_candidates(tmdb: Tmdb, title: str, year: int | None) -> list[dict]:
     seen, out = set(), []
 
@@ -669,6 +699,45 @@ def fmt_result(r: dict) -> str:
     return f"{bold(t)}{dim(extra)} ({y})  {dim('#' + str(r['id']))}\n      {dim(ov)}"
 
 
+def ask_user(ranked: list[dict], tmdb: Tmdb, defer) -> dict | None:
+    """Die interaktive Auswahl — herausgelöst, damit choose() die Entscheidung
+    trifft und nicht auch noch die Bedienung führt."""
+    while True:
+        try:
+            ans = input(dim(_("   number / [s]kip / [i]d / [n]ew search / [q]uit: "))).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            raise SystemExit(1)
+        if ans in ("q", "quit"):
+            raise SystemExit(0)
+        if ans in ("", "s", "skip"):
+            # bewusst übersprungen — bleibt trotzdem im Report, sonst geht die
+            # Datei bei einem --from-report-Durchgang verloren
+            defer(_("deferred"))
+            return None
+        if ans in ("i", "id"):
+            raw = input(dim(_("   TMDB id: "))).strip()
+            m = re.search(r"\d+", raw)
+            if not m:
+                continue
+            d = tmdb.details(int(m.group()))
+            if not d:
+                warn(_("   id not found"))
+                continue
+            info("   " + green("→ ") + fmt_result(d).split("\n")[0])
+            return d
+        if ans in ("n", "neu", "search"):
+            q = input(dim(_("   search term: "))).strip()
+            if q:
+                ranked = sorted(find_candidates(tmdb, q, None),
+                                key=lambda r: score(r, q, None), reverse=True)
+                for i, r in enumerate(ranked[:6], 1):
+                    info(f"   {cyan(str(i))}) {fmt_result(r)}")
+            continue
+        if ans.isdigit() and 1 <= int(ans) <= min(6, len(ranked)):
+            return ranked[int(ans) - 1]
+
+
 def choose(cands: list[dict], title: str, year: int | None,
            mode: str, tmdb: Tmdb, unresolved: list | None = None,
            video: Path | None = None) -> dict | None:
@@ -760,40 +829,7 @@ def choose(cands: list[dict], title: str, year: int | None,
         for i, r in enumerate(ranked[:6], 1):
             info(f"   {cyan(str(i))}) {fmt_result(r)}")
 
-    while True:
-        try:
-            ans = input(dim(_("   number / [s]kip / [i]d / [n]ew search / [q]uit: "))).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            raise SystemExit(1)
-        if ans in ("q", "quit"):
-            raise SystemExit(0)
-        if ans in ("", "s", "skip"):
-            # bewusst übersprungen — bleibt trotzdem im Report, sonst geht die
-            # Datei bei einem --from-report-Durchgang verloren
-            defer(_("deferred"))
-            return None
-        if ans in ("i", "id"):
-            raw = input(dim(_("   TMDB id: "))).strip()
-            m = re.search(r"\d+", raw)
-            if not m:
-                continue
-            d = tmdb.details(int(m.group()))
-            if not d:
-                warn(_("   id not found"))
-                continue
-            info("   " + green("→ ") + fmt_result(d).split("\n")[0])
-            return d
-        if ans in ("n", "neu", "search"):
-            q = input(dim(_("   search term: "))).strip()
-            if q:
-                ranked = sorted(find_candidates(tmdb, q, None),
-                                key=lambda r: score(r, q, None), reverse=True)
-                for i, r in enumerate(ranked[:6], 1):
-                    info(f"   {cyan(str(i))}) {fmt_result(r)}")
-            continue
-        if ans.isdigit() and 1 <= int(ans) <= min(6, len(ranked)):
-            return ranked[int(ans) - 1]
+    return ask_user(ranked, tmdb, defer)
 
 
 # --------------------------------------------------------------------------- #
@@ -1242,6 +1278,24 @@ def read_report(path: Path) -> list[Path]:
     return out
 
 
+PART_RE = re.compile(
+    r"[ ._-]*\b(?:cd|disc|disk|part|pt|teil)[ ._-]?(\d{1,2})\b", re.I)
+
+
+def split_part(stem: str) -> tuple[str, int | None]:
+    """Zerlegt einen Namen in (Basis, Teilnummer).
+
+    Ein Film auf zwei Dateien trägt in beiden denselben Titel; ohne diese
+    Trennung bekämen beide einen identischen Zielnamen, und die
+    Duplikat-Prüfung würde sie als Doppelbestand melden.
+    """
+    m = PART_RE.search(stem)
+    if not m:
+        return stem, None
+    base = (stem[:m.start()] + stem[m.end():])
+    return re.sub(r"\s{2,}", " ", base).strip(" ._-"), int(m.group(1))
+
+
 def strip_tag(text: str) -> str:
     """Vorhandene [tmdbid-…]/[imdbid-…] entfernen und Lücken schließen."""
     out = re.sub(r"\[imdbid-tt\d+\]", "", TAG_RE.sub("", text), flags=re.I)
@@ -1265,7 +1319,11 @@ def apply_tag(f: Path, movie: dict, imdb: str | None, args, roots: set,
         # erst umzubenennen und dann nochmal — sonst tragen die Beifänger den
         # alten Tag doppelt, und das Ziel kollidiert mit sich selbst.
         base = strip_tag(f.stem) if retag else f.stem
+        # Jellyfin erwartet den Teil-Hinweis am Ende, hinter dem Tag
+        base, part = split_part(base)
         target_stem = new_stem(base, movie, tag, args.style)
+        if part:
+            target_stem = f"{target_stem} - part{part}"
         dst = f.with_name(target_stem + f.suffix)
         renames.append((f, dst if dst == f else unique_path(dst)))
 
@@ -1523,7 +1581,7 @@ def disable_nfo(nfo: Path, dry: bool) -> Path | None:
 
 
 def verify(tmdb: Tmdb, files: list[Path], report: Path | None,
-           fix_nfo: bool = False, dry: bool = False) -> int:
+           fix_nfo: bool = False, dry: bool = False, workers: int = 6) -> int:
     """Bestehende [tmdbid-N]-Tags gegen den Dateinamen gegenprüfen.
 
     Findet Tags, die auf einen ganz anderen Film zeigen — etwa aus einem
@@ -1534,7 +1592,9 @@ def verify(tmdb: Tmdb, files: list[Path], report: Path | None,
     if not tagged:
         raise SystemExit(_("No tagged files found."))
 
-    info(bold(_("checking {n} tagged files").format(n=len(tagged))) + "\n")
+    info(bold(_("checking {n} tagged files").format(n=len(tagged))))
+    prefetch_details(tmdb, [mid for _f, mid in tagged], workers)
+    info("")
     suspect: list[dict] = []
     fixed: list[str] = []
     by_id: dict[int, list[str]] = {}
@@ -1605,7 +1665,10 @@ def verify(tmdb: Tmdb, files: list[Path], report: Path | None,
             info(dim(_("   … {idx}/{total} checked, {n} suspect")
                     .format(idx=idx, total=len(tagged), n=len(suspect))))
 
-    dupes = {i: names for i, names in by_id.items() if len(names) > 1}
+    # Mehrteiler tragen zu Recht dieselbe ID — nur echte Doppel melden
+    dupes = {i: names for i, names in by_id.items()
+             if len(names) > 1
+             and len({split_part(Path(n).stem)[1] for n in names}) < len(names)}
     if dupes:
         info("")
         info(bold(yellow(_("{n} duplicate id(s)").format(n=len(dupes)))))
@@ -1660,7 +1723,7 @@ def undo_last(count: int, dry: bool):
 # Main
 # --------------------------------------------------------------------------- #
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="tmdbtag",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1728,6 +1791,22 @@ Set TMDBTAG_LANG=de for German output.
                     help=_("store the API key permanently (omit the value to be "
                            "prompted, keeping it out of the shell history)"))
     ap.add_argument("--undo", type=int, metavar="N", help=_("undo the last N renames"))
+    return ap
+
+
+def gather_files(args, report_path: Path) -> list[Path]:
+    """Die zu bearbeitenden Dateien bestimmen — aus dem Report oder vom Scan."""
+    if args.from_report:
+        files = read_report(report_path)
+        if not files:
+            raise SystemExit(_("Report lists no existing files any more."))
+        info(dim(_("{n} file(s) from {path}").format(n=len(files), path=report_path)))
+        return files
+    return collect(args.paths, args.min_size * 1024 * 1024, args.recursive)
+
+
+def main() -> int:
+    ap = build_parser()
     args = ap.parse_args()
 
     if args.set_key is not None:
@@ -1753,18 +1832,13 @@ Set TMDBTAG_LANG=de for German output.
     report_path = (Path(args.report).expanduser() if args.report
                    else CONFIG_DIR / "offen.jsonl")
 
-    if args.from_report:
-        files = read_report(report_path)
-        if not files:
-            raise SystemExit(_("Report lists no existing files any more."))
-        info(dim(_("{n} file(s) from {path}").format(n=len(files), path=report_path)))
-    else:
-        files = collect(args.paths, args.min_size * 1024 * 1024, args.recursive)
+    files = gather_files(args, report_path)
     if not files:
         raise SystemExit(_("No video files found."))
 
     if args.verify:
-        return verify(tmdb, files, report_path, args.fix_nfo, args.dry_run)
+        return verify(tmdb, files, report_path, args.fix_nfo, args.dry_run,
+                      args.workers)
 
     if args.inspect:
         roots = {Path(p).expanduser().resolve() for p in args.paths}
@@ -1777,6 +1851,11 @@ Set TMDBTAG_LANG=de for German output.
         return set_id(tmdb, files, args.id,
                       args, {Path(p).expanduser().resolve() for p in args.paths})
 
+    return run_tagging(tmdb, files, args, report_path)
+
+
+def run_tagging(tmdb: Tmdb, files: list[Path], args, report_path: Path) -> int:
+    """Der eigentliche Durchlauf: auflösen, taggen, offene Fälle sammeln."""
     mode = ("yes" if args.yes else "batch" if args.batch
             else "auto" if args.auto else "ask")
     roots = {Path(p).expanduser().resolve() for p in args.paths}
