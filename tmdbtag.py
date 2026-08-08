@@ -20,6 +20,7 @@ import difflib
 import json
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -145,6 +146,16 @@ _DE = {
     "No tagged files found.": "Keine getaggten Dateien gefunden.",
     "checking {n} tagged files": "{n} getaggte Dateien werden geprüft",
     "id {mid} does not exist on TMDB": "ID {mid} existiert auf TMDB nicht",
+    "{size:.2f} GB, {mins} min": "{size:.2f} GB, {mins} min",
+    "NFO agrees (#{id})": "NFO stimmt überein (#{id})",
+    "   tag it? number / [s]kip / [q]uit: ":
+        "   taggen? Nummer / [s]kip / [q]uit: ",
+    "Drag a file into the terminal and press Enter. [q] quits.":
+        "Datei ins Terminal ziehen und Enter drücken. [q] beendet.",
+    "that is a directory — pass it as an argument instead":
+        "das ist ein Ordner — den bitte als Argument übergeben",
+    "analyse the given files in detail and offer to tag them; without any path, take files dragged into the terminal":
+        "die angegebenen Dateien ausführlich analysieren und das Taggen anbieten; ohne Pfad Dateien entgegennehmen, die ins Terminal gezogen werden",
     "no film, but TV series #{id} \"{name}\" — belongs in the shows library":
         "kein Film, aber TV-Serie #{id} \"{name}\" — gehört in die Serien-Bibliothek",
     "TV series #{id}, not a film": "TV-Serie #{id}, kein Film",
@@ -1276,6 +1287,146 @@ def apply_tag(f: Path, movie: dict, imdb: str | None, args, roots: set,
     return video_after
 
 
+def unquote_path(text: str) -> Path | None:
+    """Was das Terminal beim Hineinziehen einer Datei einfügt, zu einem Pfad machen.
+
+    macOS setzt Backslashes vor Leerzeichen und Sonderzeichen, andere
+    Terminals setzen Anführungszeichen — beides muss weg.
+    """
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        parts = shlex.split(text)
+        if parts:
+            return Path(parts[0]).expanduser()
+    except ValueError:
+        pass                                   # unpaarige Anführungszeichen
+    return Path(text.replace("\\ ", " ").strip("'\"")).expanduser()
+
+
+def inspect(tmdb: Tmdb, f: Path, args, roots: set) -> bool:
+    """Alles zeigen, was über eine Datei bekannt ist, und das Taggen anbieten.
+
+    Gedacht für den Einzelfall: Datei ins Terminal ziehen und sehen, woran
+    die Zuordnung hängt, statt einen Ordnerlauf zu starten.
+    """
+    info("")
+    info(bold(f.name))
+    info(dim(f"   {f.parent}"))
+
+    try:
+        size = f.stat().st_size / 1024 ** 3
+    except OSError as e:
+        err(_("not found: {p}").format(p=e))
+        return False
+    mins = media_duration(f)
+    info("   " + dim(_("{size:.2f} GB, {mins} min")
+                     .format(size=size, mins=mins if mins else "?")))
+
+    # Was steht schon im Namen und in der NFO?
+    tagged = TAG_RE.search(f.name)
+    current = None
+    if tagged:
+        mid = int(re.search(r"\d+", tagged.group()).group())
+        current = tmdb.details(mid) or None
+        if current:
+            info("   " + green(_("tag in name: #{id} {title}")
+                               .format(id=mid, title=f"{current.get('title')} "
+                                       f"({year_of(current) or '?'}, "
+                                       f"{current.get('runtime') or '?'} min)")))
+        else:
+            info("   " + red(_("id {mid} does not exist on TMDB").format(mid=mid)))
+    nfo = nfo_tmdb_id(f)
+    if nfo:
+        if tagged and nfo[1] != int(re.search(r"\d+", tagged.group()).group()):
+            info("   " + red(_("NFO overrides the filename: {nfo_id} vs {file_id}")
+                             .format(nfo_id=nfo[1],
+                                     file_id=re.search(r"\d+", tagged.group()).group())))
+        else:
+            info("   " + dim(_("NFO agrees (#{id})").format(id=nfo[1])))
+
+    title, year = parse_release(strip_tag(source_name(f)))
+    info("   " + dim(_('detected: "{title}"').format(title=title)
+                     + (f" ({year})" if year else _(" (no year)"))))
+
+    cands = find_candidates(tmdb, title, year)
+    if not cands:
+        info("   " + yellow(_("no TMDB match")))
+        try:
+            for sh in tmdb.search_tv(title, year)[:2]:
+                if title_agrees(title, sh.get("name") or ""):
+                    info("   " + yellow(_('no film, but TV series #{id} "{name}" — '
+                                          "belongs in the shows library")
+                                        .format(id=sh["id"], name=sh.get("name"))))
+                    break
+        except TmdbUnavailable:
+            pass
+        return False
+
+    ranked = sorted(cands, key=lambda r: score(r, title, year), reverse=True)[:6]
+    info("   " + bold(_("Matches:")))
+    for i, r in enumerate(ranked, 1):
+        rt = (tmdb.details(r["id"]) or {}).get("runtime") or 0
+        fit = ""
+        if mins and rt:
+            d = abs(rt - mins)
+            fit = (green(f"  {rt} min ✓") if d <= 6
+                   else dim(f"  {rt} min ({d:+} min)") if d <= 20
+                   else yellow(f"  {rt} min ({rt - mins:+} min)"))
+        mark = " " if not current or r["id"] != current.get("id") else dim(" ←")
+        info(f"   {cyan(str(i))}) {fmt_result(r).splitlines()[0]}{fit}{mark}")
+
+    if not sys.stdin.isatty():
+        return False
+    try:
+        ans = input(dim(_("   tag it? number / [s]kip / [q]uit: "))).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    if ans in ("q", "quit"):
+        raise SystemExit(0)
+    if not ans.isdigit() or not 1 <= int(ans) <= len(ranked):
+        return False
+
+    movie = ranked[int(ans) - 1]
+    imdb = (tmdb.details(movie["id"]) or {}).get("imdb_id") if args.imdb else None
+    apply_tag(f, movie, imdb, args, roots, retag=True)
+    if nfo and args.fix_nfo:
+        disable_nfo(nfo[0], args.dry_run)
+    return True
+
+
+def drag_loop(tmdb: Tmdb, args) -> int:
+    """Dateien nacheinander entgegennehmen, bis der Benutzer aufhört."""
+    info(bold(_("Drag a file into the terminal and press Enter. [q] quits.")))
+    done = 0
+    while True:
+        try:
+            raw = input(cyan("\n› "))
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if raw.strip().lower() in ("q", "quit", "exit"):
+            break
+        f = unquote_path(raw)
+        if f is None:
+            continue
+        if not f.exists():
+            warn(_("not found: {p}").format(p=f))
+            continue
+        if f.is_dir():
+            warn(_("that is a directory — pass it as an argument instead"))
+            continue
+        try:
+            if inspect(tmdb, f, args, {f.parent}):
+                done += 1
+        except TmdbUnavailable as e:
+            err(_("   TMDB unreachable: {e} → skipped").format(e=e))
+    info(bold(_("Done: ") + _("{n} tagged").format(n=done)))
+    return 0
+
+
 def set_id(tmdb: Tmdb, files: list[Path], movie_id: int, args, roots: set) -> int:
     """Eine bekannte TMDB-ID direkt setzen, ohne Suche.
 
@@ -1496,6 +1647,8 @@ Set TMDBTAG_LANG=de for German output.
     ap.add_argument("--id", type=int, metavar="N",
                     help=_("set this TMDB id on the given files directly, without "
                            "searching (replaces an existing tag)"))
+    ap.add_argument("--inspect", action="store_true",
+                    help=_("analyse the given files in detail and offer to tag them; without any path, take files dragged into the terminal"))
     ap.add_argument("--verify", action="store_true",
                     help=_("check existing [tmdbid-…] tags against the filename"))
     ap.add_argument("--fix-nfo", action="store_true",
@@ -1545,6 +1698,8 @@ Set TMDBTAG_LANG=de for German output.
         return 0
     # --from-report bezieht die Dateien aus dem Report, braucht also keinen Pfad
     if not args.paths and not args.from_report:
+        if args.inspect:
+            return drag_loop(Tmdb(load_key(args.api_key), args.lang, args.timeout), args)
         ap.print_help()
         return 1
 
@@ -1564,6 +1719,13 @@ Set TMDBTAG_LANG=de for German output.
 
     if args.verify:
         return verify(tmdb, files, report_path, args.fix_nfo, args.dry_run)
+
+    if args.inspect:
+        roots = {Path(p).expanduser().resolve() for p in args.paths}
+        n = sum(1 for f in files if inspect(tmdb, f, args, roots))
+        info("")
+        info(bold(_("Done: ") + _("{n} tagged").format(n=n)))
+        return 0
 
     if args.id:
         return set_id(tmdb, files, args.id,

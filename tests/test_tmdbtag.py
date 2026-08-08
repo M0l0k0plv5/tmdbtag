@@ -1198,6 +1198,101 @@ class TestDuplicateIds(E2EBase):
         self.assertNotIn("duplicate", out)
 
 
+class TestDragAndInspect(E2EBase):
+    """Datei ins Terminal ziehen, analysieren, auf Wunsch taggen."""
+
+    def test_unquotes_what_terminals_paste(self):
+        cases = [
+            ("/a/Some\\ Film.mkv", "/a/Some Film.mkv"),          # macOS escaped
+            ("'/a/Some Film.mkv'", "/a/Some Film.mkv"),          # einfache Quotes
+            ('"/a/Some Film.mkv"', "/a/Some Film.mkv"),          # doppelte Quotes
+            ("  /a/Film.mkv  \n", "/a/Film.mkv"),                # Leerraum
+            ("/a/Wei\\ \\[2\\].mkv", "/a/Wei [2].mkv"),          # escapte Klammern
+        ]
+        for raw, want in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(str(t.unquote_path(raw)), want)
+
+    def test_unquote_survives_unbalanced_quotes(self):
+        self.assertIsNotNone(t.unquote_path('/a/it\'s a film.mkv'))
+
+    def test_unquote_ignores_empty_input(self):
+        self.assertIsNone(t.unquote_path("   "))
+
+    def test_inspect_shows_what_matters(self):
+        v = self.make("f/Das.Boot.1981.German.1080p-SoW [tmdbid-387].mkv")
+        v.with_suffix(".nfo").write_text(
+            "<movie><tmdbid>387</tmdbid><runtime>149</runtime></movie>")
+        real = t.Tmdb._get
+
+        def with_runtime(self, path, **p):
+            d = dict(real(self, path, **p))
+            if path.startswith("/movie/"):
+                d["runtime"] = 149
+            return d
+
+        t.Tmdb._get = with_runtime
+        try:
+            with mock.patch("builtins.input", return_value="s"), \
+                    mock.patch.object(sys.stdin, "isatty", return_value=True):
+                _, out = self.run_cli("--inspect", str(v))
+        finally:
+            t.Tmdb._get = real
+        self.assertIn("149 min", out)          # Laufzeit der Datei
+        self.assertIn("tag in name: #387", out)
+        self.assertIn("NFO agrees", out)
+        self.assertIn("Matches:", out)
+
+    def test_inspect_flags_an_overriding_nfo(self):
+        v = self.make("f/The.Wall.2017.German-GRP [tmdbid-405775].mkv")
+        v.with_suffix(".nfo").write_text("<movie><tmdbid>106646</tmdbid></movie>")
+        with mock.patch("builtins.input", return_value="s"), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            _, out = self.run_cli("--inspect", str(v))
+        self.assertIn("NFO overrides the filename", out)
+
+    def test_inspect_tags_on_confirmation(self):
+        v = self.make("f/Das.Boot.1981.German.1080p.BluRay.x264-SoW.mkv")
+        with mock.patch("builtins.input", return_value="1"), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            self.run_cli("--inspect", str(v))
+        self.assertIn("f/Das.Boot.1981.German.1080p.BluRay.x264-SoW [tmdbid-387].mkv",
+                      self.names())
+
+    def test_inspect_leaves_the_file_alone_on_skip(self):
+        v = self.make("f/Das.Boot.1981.German.1080p.BluRay.x264-SoW.mkv")
+        before = self.names()
+        with mock.patch("builtins.input", return_value="s"), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            self.run_cli("--inspect", str(v))
+        self.assertEqual(before, self.names())
+
+    def test_drag_loop_handles_a_missing_file_and_quits(self):
+        with mock.patch("builtins.input", side_effect=["/gibt/es/nicht.mkv", "q"]), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            rc, out = self.run_cli("--inspect")
+        self.assertEqual(rc, 0)
+        self.assertIn("not found", out)
+        self.assertIn("Done:", out)
+
+    def test_drag_loop_rejects_a_directory(self):
+        d = self.tmp / "f"
+        d.mkdir(exist_ok=True)
+        with mock.patch("builtins.input", side_effect=[str(d), "q"]), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            _, out = self.run_cli("--inspect")
+        self.assertIn("directory", out)
+
+    def test_drag_loop_tags_a_dragged_file(self):
+        v = self.make("f/Das.Boot.1981.German.1080p.BluRay.x264-SoW.mkv")
+        escaped = str(v).replace(" ", "\\ ")
+        with mock.patch("builtins.input", side_effect=[escaped, "1", "q"]), \
+                mock.patch.object(sys.stdin, "isatty", return_value=True):
+            self.run_cli("--inspect")
+        self.assertIn("f/Das.Boot.1981.German.1080p.BluRay.x264-SoW [tmdbid-387].mkv",
+                      self.names())
+
+
 class TestNfo(E2EBase):
     def test_nfo_written_next_to_video(self):
         d = "Das.Boot.1981.German.1080p.BluRay.x264-SoW"

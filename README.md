@@ -97,6 +97,31 @@ Das.Boot.1981.German.DL.1080p.BluRay.x264-SoW.mkv  /Volumes/Media/Movies
 
 `[i]` lets you paste a TMDB ID directly when the search is hopeless.
 
+### Inspecting a single file
+
+Drag a file into the terminal and see everything that bears on its identification —
+size, actual runtime, the tag already in the name, whether a sidecar NFO agrees, what the
+parser made of the filename, and how each candidate's runtime compares:
+
+```bash
+tmdbtag --inspect            # then drag files in, one after another
+tmdbtag --inspect FILE       # or pass them as arguments
+```
+
+```
+The.Prestige.2006.German.AC3.1080p.BluRay.x265-GTF [tmdbid-1124].mkv
+   1.49 GB, 131 min
+   tag in name: #1124 Prestige - Die Meister der Magie (2006, 130 min)
+   NFO agrees (#1124)
+   detected: "The Prestige" (2006)
+   Matches:
+   1) Prestige - Die Meister der Magie / The Prestige (2006)  #1124  130 min ✓ ←
+   tag it? number / [s]kip / [q]uit:
+```
+
+`✓` marks a runtime within 6 minutes, `←` the id the file already carries. Paths pasted by
+the terminal are unescaped for you, backslashes and quotes alike.
+
 ### When you already know the id
 
 Some cases no heuristic can settle — a film released under a different title, or a TMDB entry
@@ -130,6 +155,7 @@ and says so instead of guessing — those files belong in your shows library, no
 | `--fix-nfo` | With `--verify`: move contradicting NFOs aside to `.nfo.bak` |
 | `--from-report` | Work through the deferred cases instead of rescanning |
 | `--id N` | Set this TMDB id directly, no search — replaces an existing tag |
+| `--inspect` | Analyse files in detail and offer to tag; without a path, accept dragged files |
 | `-y`, `--yes` | Never ask; always take the best match (risky on messy libraries) |
 | `--style clean` | Rename to `Title (Year) [tmdbid-N]` instead of keeping the release name |
 | `--folder` | Also tag the containing folder — skipped for folders holding several movies |
@@ -200,7 +226,7 @@ The interface is English. Set `TMDBTAG_LANG=de` for German output.
 python3 -m unittest discover -s tests -v
 ```
 
-112 tests, no network access (the TMDB client is stubbed), no dependencies.
+122 tests, no network access (the TMDB client is stubbed), no dependencies.
 
 ## Licence
 
