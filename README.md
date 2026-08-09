@@ -46,8 +46,8 @@ Get a free API key at [themoviedb.org/settings/api](https://www.themoviedb.org/s
 tmdbtag --set-key              # prompts, stored in ~/.config/tmdbtag/config.json (chmod 600)
 ```
 
-Pass the key as an argument (`--set-key abc123`) only if you don't mind it landing in your
-shell history. `TMDB_API_KEY` in the environment works too.
+`--set-key` takes no value — it always prompts, so the key never reaches your shell history
+or the process list. For unattended setups put `TMDB_API_KEY` in the environment instead.
 
 ## Usage
 

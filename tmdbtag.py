@@ -134,10 +134,10 @@ _DE = {
     "\r   querying TMDB … {done}/{total}": "\r   frage TMDB ab … {done}/{total}",
     "No TMDB API key.\n": "Kein TMDB-API-Key.\n",
     "  Get one for free at https://www.themoviedb.org/settings/api\n"
-    "  then store it:      tmdbtag --set-key YOUR_KEY\n"
+    "  then store it:      tmdbtag --set-key   (prompts, no echo)\n"
     "  or:                 export TMDB_API_KEY=YOUR_KEY":
         "  Hol dir einen (gratis) unter https://www.themoviedb.org/settings/api\n"
-        "  und speichere ihn:  tmdbtag --set-key DEIN_KEY\n"
+        "  und speichere ihn:  tmdbtag --set-key   (fragt nach, ohne Echo)\n"
         "  oder:               export TMDB_API_KEY=DEIN_KEY",
     "key stored in {path}": "Key gespeichert in {path}",
     "No report at {path}. Run `tmdbtag --batch <dir>` first.":
@@ -225,6 +225,12 @@ _DE = {
         "verschieben, damit Jellyfin den Namen nutzt",
     "TMDB API key (not echoed): ": "TMDB-API-Key (wird nicht angezeigt): ",
     "No key entered.": "Kein Key eingegeben.",
+    "--set-key takes no value; it always prompts. If you just typed "
+    "your key on the command line, clear it from your shell history "
+    "and treat it as compromised.":
+        "--set-key nimmt keinen Wert entgegen und fragt immer nach. Falls du "
+        "deinen Key gerade auf der Kommandozeile getippt hast: aus der "
+        "Shell-History löschen und als kompromittiert behandeln.",
     "store the API key permanently (omit the value to be prompted, "
     "keeping it out of the shell history)":
         "API-Key dauerhaft speichern (ohne Wert wird abgefragt, dann "
@@ -274,8 +280,6 @@ _DE = {
     "TMDB metadata language (default de-DE)": "TMDB-Sprache (Standard de-DE)",
     "minimum size in MB when scanning directories (default 50)":
         "Mindestgröße in MB beim Ordner-Scan (Standard 50)",
-    "TMDB API key (v3) or read access token (v4)":
-        "TMDB API-Key (v3) oder Read-Access-Token (v4)",
     "undo the last N renames": "letzte N Umbenennungen rückgängig",
 }
 
@@ -1221,9 +1225,12 @@ def collect(paths: list[str], min_size: int, recursive: bool) -> list[Path]:
 # Key-Handling
 # --------------------------------------------------------------------------- #
 
-def load_key(cli_key: str | None) -> str:
-    if cli_key:
-        return cli_key
+def load_key() -> str:
+    """Key aus Umgebung oder Config — bewusst nicht von der Kommandozeile.
+
+    argv steht in der Shell-History und ist per `ps` für jeden Benutzer der
+    Maschine sichtbar, also gibt es keinen Weg, den Key als Argument zu setzen.
+    """
     env = os.environ.get("TMDB_API_KEY") or os.environ.get("TMDB_TOKEN")
     if env:
         return env
@@ -1236,7 +1243,7 @@ def load_key(cli_key: str | None) -> str:
             pass
     raise SystemExit(red(_("No TMDB API key.\n"))
         + _("  Get one for free at https://www.themoviedb.org/settings/api\n"
-            "  then store it:      tmdbtag --set-key YOUR_KEY\n"
+            "  then store it:      tmdbtag --set-key   (prompts, no echo)\n"
             "  or:                 export TMDB_API_KEY=YOUR_KEY"))
 
 
@@ -1729,7 +1736,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=_("Appends Jellyfin-readable [tmdbid-…] tags to movie files."),
         epilog="""examples:
-  tmdbtag --set-key abc123…
+  tmdbtag --set-key                 # prompts for the key, no echo
   tmdbtag ~/Movies                  # interactive, recurses into directories
   tmdbtag -n ~/Movies               # dry run, changes nothing
   tmdbtag --batch ~/Movies          # unattended, defers uncertain cases
@@ -1786,10 +1793,9 @@ Set TMDBTAG_LANG=de for German output.
     ap.add_argument("--min-size", type=int, default=50,
                     help=_("minimum size in MB when scanning directories (default 50)"))
     ap.add_argument("--no-recursive", dest="recursive", action="store_false", default=True)
-    ap.add_argument("--api-key", help=_("TMDB API key (v3) or read access token (v4)"))
-    ap.add_argument("--set-key", nargs="?", const="", metavar="KEY",
-                    help=_("store the API key permanently (omit the value to be "
-                           "prompted, keeping it out of the shell history)"))
+    ap.add_argument("--set-key", action="store_true",
+                    help=_("store the API key permanently (prompts for it; the key "
+                           "is never accepted as an argument)"))
     ap.add_argument("--undo", type=int, metavar="N", help=_("undo the last N renames"))
     return ap
 
@@ -1809,11 +1815,16 @@ def main() -> int:
     ap = build_parser()
     args = ap.parse_args()
 
-    if args.set_key is not None:
-        key = args.set_key
-        if not key:
-            import getpass
-            key = getpass.getpass(_("TMDB API key (not echoed): ")).strip()
+    if args.set_key:
+        # Ein übrig gebliebenes Positional ist fast sicher der Key selbst — dann
+        # steht er schon in der History, also klar sagen statt still ignorieren.
+        if args.paths:
+            raise SystemExit(_(
+                "--set-key takes no value; it always prompts. If you just typed "
+                "your key on the command line, clear it from your shell history "
+                "and treat it as compromised."))
+        import getpass
+        key = getpass.getpass(_("TMDB API key (not echoed): ")).strip()
         if not key:
             raise SystemExit(_("No key entered."))
         save_key(key)
@@ -1824,11 +1835,11 @@ def main() -> int:
     # --from-report bezieht die Dateien aus dem Report, braucht also keinen Pfad
     if not args.paths and not args.from_report:
         if args.inspect:
-            return drag_loop(Tmdb(load_key(args.api_key), args.lang, args.timeout), args)
+            return drag_loop(Tmdb(load_key(), args.lang, args.timeout), args)
         ap.print_help()
         return 1
 
-    tmdb = Tmdb(load_key(args.api_key), args.lang, args.timeout)
+    tmdb = Tmdb(load_key(), args.lang, args.timeout)
     report_path = (Path(args.report).expanduser() if args.report
                    else CONFIG_DIR / "offen.jsonl")
 

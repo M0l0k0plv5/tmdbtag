@@ -230,7 +230,7 @@ class E2EBase(unittest.TestCase):
                        for n in ("load_key", "LOG_FILE", "CONFIG_DIR", "CONFIG_FILE")}
         self._real_get = t.Tmdb._get
         t.Tmdb._get = fake_get
-        t.load_key = lambda _: "fake"
+        t.load_key = lambda: "fake"
         self.tmp = Path(tempfile.mkdtemp())
         t.LOG_FILE = self.tmp / "renames.jsonl"
         t.CONFIG_DIR = self.tmp
@@ -999,6 +999,17 @@ class TestSafety(E2EBase):
             rc = t.main()
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(t.CONFIG_FILE.read_text())["api_key"], "abc123")
+
+    def test_set_key_refuses_a_key_on_the_command_line(self):
+        """--set-key nimmt keinen Wert entgegen — sonst stünde der Key in der
+        History und in der Prozessliste."""
+        t.CONFIG_FILE = self.tmp / "config.json"
+        with mock.patch("getpass.getpass", return_value="abc123"), \
+                redirect_stdout(io.StringIO()):
+            sys.argv = ["tmdbtag", "--set-key", "abc123"]
+            with self.assertRaises(SystemExit):
+                t.main()
+        self.assertFalse(t.CONFIG_FILE.exists())
 
     def test_empty_prompted_key_is_refused(self):
         t.CONFIG_FILE = self.tmp / "config.json"

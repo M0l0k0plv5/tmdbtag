@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- **Breaking:** `--set-key` no longer accepts the key as an argument and always
+  prompts instead, so it can never reach the shell history or the process list
+  (argv is world-readable via `ps` on a multi-user box). `tmdbtag --set-key KEY`
+  now exits with an error telling you to treat that key as compromised.
+  Unattended setups should use `TMDB_API_KEY` in the environment.
+- **Breaking:** `--api-key` removed for the same reason. The key now comes from
+  `TMDB_API_KEY`/`TMDB_TOKEN` or the stored config only — never from argv.
+
 ## v1.0.0 — 2026-08-08
 
 First release. Most of the entries below come from running the tool over a
