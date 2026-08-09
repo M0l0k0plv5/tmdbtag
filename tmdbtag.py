@@ -1587,6 +1587,118 @@ def disable_nfo(nfo: Path, dry: bool) -> Path | None:
         return None
 
 
+def _nfo_conflict(nfo: tuple[Path, int], f: Path, mid: int, head: str,
+                  fix_nfo: bool, dry: bool) -> tuple[str | None, dict | None]:
+    """Eine NFO, die dem Dateinamen widerspricht: melden, optional beiseitelegen.
+
+    Gibt (beiseitegelegte NFO, Verdachtsfall) zurück — je nachdem, ob repariert
+    oder nur protokolliert wurde, ist genau eins davon gesetzt.
+    """
+    info(head)
+    info("   " + red(_("NFO overrides the filename: {nfo_id} vs {file_id}")
+                     .format(nfo_id=nfo[1], file_id=mid)))
+    if fix_nfo:
+        disable_nfo(nfo[0], dry)
+        return str(nfo[0]), None
+    info("   " + dim(_("   Jellyfin reads {name} first — rename or delete it")
+                     .format(name=nfo[0].name)))
+    return None, {"file": str(f), "nfo": str(nfo[0]),
+                  "reason": _("NFO id {nfo_id} contradicts filename {file_id}")
+                  .format(nfo_id=nfo[1], file_id=mid)}
+
+
+def _check_tag(tmdb: Tmdb, f: Path, mid: int, head: str) -> dict | None:
+    """Einen [tmdbid-N]-Tag gegen TMDB prüfen — Verdachtsfall oder None.
+
+    TmdbUnavailable wird durchgereicht, damit der Aufrufer Netzfehler von
+    inhaltlichen Abweichungen unterscheiden kann.
+    """
+    stem = TAG_RE.sub("", f.stem)
+    title, year = parse_release(stem)
+    movie = tmdb.details(mid)
+    if not movie:
+        info(head)
+        info("   " + red(_("id {mid} does not exist on TMDB").format(mid=mid)))
+        return {"file": str(f), "reason": _("id {mid} unknown").format(mid=mid),
+                "title": title}
+
+    sim = max(similarity(title, movie.get("title", "")),
+              similarity(title, movie.get("original_title", "")))
+    agrees = (title_agrees(title, movie.get("title", ""))
+              or title_agrees(title, movie.get("original_title", "")))
+    ry = year_of(movie)
+    year_off = bool(year and ry and abs(ry - year) > 1)
+
+    # Laufzeit nur bei grober Abweichung melden: Extended Cuts, Remaster
+    # und PAL-Fassungen weichen regelmäßig um 10-20 Minuten ab, ein
+    # anderer Film fast immer um ein Vielfaches davon.
+    mins, rt = media_duration(f), movie.get("runtime") or 0
+    runtime_off = bool(mins and rt and abs(rt - mins) > max(30, rt * 0.4))
+    if not (not agrees or year_off or runtime_off):
+        return None
+
+    info(head)
+    reason = []
+    if not agrees:
+        reason.append(_("title mismatch (similarity {sim})").format(sim=f"{sim:.2f}"))
+    if year_off:
+        reason.append(_("year {year} vs TMDB {ry}").format(year=year, ry=ry))
+    if runtime_off:
+        reason.append(_("runtime {mins} min vs TMDB {rt} min")
+                      .format(mins=mins, rt=rt))
+    info("   " + yellow(" / ".join(reason)))
+    info("   " + dim(_('file: "{title}" ({year})   TMDB #{mid}: "{mt}" ({ry})')
+                 .format(title=title, year=year, mid=mid,
+                         mt=movie.get("title"), ry=ry)))
+    return {"file": str(f), "reason": " / ".join(reason),
+            "title": title, "year": year,
+            "candidates": [{"id": mid, "title": movie.get("title"), "year": ry}]}
+
+
+def _duplicate_ids(by_id: dict[int, list[str]]) -> list[dict]:
+    """Mehrteiler tragen zu Recht dieselbe ID — nur echte Doppel melden."""
+    dupes = {i: names for i, names in by_id.items()
+             if len(names) > 1
+             and len({split_part(Path(n).stem)[1] for n in names}) < len(names)}
+    if not dupes:
+        return []
+    info("")
+    info(bold(yellow(_("{n} duplicate id(s)").format(n=len(dupes)))))
+    found = []
+    for i, names in list(dupes.items())[:10]:
+        info("   " + yellow(_("   id {mid} on {n} files")
+                            .format(mid=i, n=len(names))))
+        for nm in names:
+            info("      " + dim(nm[:76]))
+        found.append({"file": names[0],
+                      "reason": _("   id {mid} on {n} files")
+                      .format(mid=i, n=len(names))})
+    return found
+
+
+def _verify_summary(total: int, suspect: list[dict], fixed: list[str],
+                    report: Path | None, dry: bool) -> int:
+    info("")
+    if fixed:
+        info(bold(green(_("{n} NFO(s) set aside").format(n=len(fixed))))
+             + (dim(_("  (dry run)")) if dry else ""))
+        if not dry:
+            info(dim(_("   Undo: tmdbtag --undo {n}").format(n=len(fixed))))
+        info(dim(_("   Now in Jellyfin: Library -> Scan with 'Replace metadata'")))
+    if not suspect:
+        if not fixed:
+            info(bold(green(_("All {n} tags look plausible.").format(n=total))))
+        return 0
+    info(bold(yellow(_("{n} of {total} suspect")
+                     .format(n=len(suspect), total=total))))
+    if report:
+        written = write_report(report, suspect)
+        if written:
+            info(f"   → {written}")
+            info(dim(_("   Fix them: tmdbtag --from-report --force")))
+    return 0
+
+
 def verify(tmdb: Tmdb, files: list[Path], report: Path | None,
            fix_nfo: bool = False, dry: bool = False, workers: int = 6) -> int:
     """Bestehende [tmdbid-N]-Tags gegen den Dateinamen gegenprüfen.
@@ -1607,105 +1719,32 @@ def verify(tmdb: Tmdb, files: list[Path], report: Path | None,
     by_id: dict[int, list[str]] = {}
     for idx, (f, mid) in enumerate(tagged, 1):
         by_id.setdefault(mid, []).append(f.name)
+        head = f"{dim(f'[{idx}/{len(tagged)}]')} {bold(f.name[:70])}"
+
         # Zuerst die NFO: sie schlägt den Dateinamen, also nützt ein korrekter
         # Tag nichts, solange daneben eine NFO mit anderer ID liegt.
         nfo = nfo_tmdb_id(f)
         if nfo and nfo[1] != mid:
-            info(f"{dim(f'[{idx}/{len(tagged)}]')} {bold(f.name[:70])}")
-            info("   " + red(_("NFO overrides the filename: {nfo_id} vs {file_id}")
-                             .format(nfo_id=nfo[1], file_id=mid)))
-            if fix_nfo:
-                disable_nfo(nfo[0], dry)
-                fixed.append(str(nfo[0]))
-            else:
-                info("   " + dim(_("   Jellyfin reads {name} first — rename or delete it")
-                                 .format(name=nfo[0].name)))
-                suspect.append({"file": str(f), "nfo": str(nfo[0]),
-                                "reason": _("NFO id {nfo_id} contradicts filename {file_id}")
-                                .format(nfo_id=nfo[1], file_id=mid)})
+            moved, entry = _nfo_conflict(nfo, f, mid, head, fix_nfo, dry)
+            if moved:
+                fixed.append(moved)
+            if entry:
+                suspect.append(entry)
             continue
 
-        stem = TAG_RE.sub("", f.stem)
-        title, year = parse_release(stem)
         try:
-            movie = tmdb.details(mid)
+            entry = _check_tag(tmdb, f, mid, head)
         except TmdbUnavailable as e:
             err(f"[{idx}/{len(tagged)}] {f.name[:60]}: {e}")
             continue
-        if not movie:
-            info(f"{dim(f'[{idx}/{len(tagged)}]')} {bold(f.name[:70])}")
-            info("   " + red(_("id {mid} does not exist on TMDB").format(mid=mid)))
-            suspect.append({"file": str(f), "reason": _("id {mid} unknown").format(mid=mid), "title": title})
-            continue
-
-        sim = max(similarity(title, movie.get("title", "")),
-                  similarity(title, movie.get("original_title", "")))
-        agrees = (title_agrees(title, movie.get("title", ""))
-                  or title_agrees(title, movie.get("original_title", "")))
-        ry = year_of(movie)
-        year_off = bool(year and ry and abs(ry - year) > 1)
-
-        # Laufzeit nur bei grober Abweichung melden: Extended Cuts, Remaster
-        # und PAL-Fassungen weichen regelmäßig um 10-20 Minuten ab, ein
-        # anderer Film fast immer um ein Vielfaches davon.
-        mins, rt = media_duration(f), movie.get("runtime") or 0
-        runtime_off = bool(mins and rt and abs(rt - mins) > max(30, rt * 0.4))
-        if not agrees or year_off or runtime_off:
-            info(f"{dim(f'[{idx}/{len(tagged)}]')} {bold(f.name[:70])}")
-            reason = []
-            if not agrees:
-                reason.append(_("title mismatch (similarity {sim})").format(sim=f"{sim:.2f}"))
-            if year_off:
-                reason.append(_("year {year} vs TMDB {ry}").format(year=year, ry=ry))
-            if runtime_off:
-                reason.append(_("runtime {mins} min vs TMDB {rt} min")
-                              .format(mins=mins, rt=rt))
-            info("   " + yellow(" / ".join(reason)))
-            info("   " + dim(_('file: "{title}" ({year})   TMDB #{mid}: "{mt}" ({ry})')
-                         .format(title=title, year=year, mid=mid,
-                                 mt=movie.get("title"), ry=ry)))
-            suspect.append({"file": str(f), "reason": " / ".join(reason),
-                            "title": title, "year": year,
-                            "candidates": [{"id": mid, "title": movie.get("title"),
-                                            "year": ry}]})
+        if entry:
+            suspect.append(entry)
         elif idx % 25 == 0:
             info(dim(_("   … {idx}/{total} checked, {n} suspect")
                     .format(idx=idx, total=len(tagged), n=len(suspect))))
 
-    # Mehrteiler tragen zu Recht dieselbe ID — nur echte Doppel melden
-    dupes = {i: names for i, names in by_id.items()
-             if len(names) > 1
-             and len({split_part(Path(n).stem)[1] for n in names}) < len(names)}
-    if dupes:
-        info("")
-        info(bold(yellow(_("{n} duplicate id(s)").format(n=len(dupes)))))
-        for i, names in list(dupes.items())[:10]:
-            info("   " + yellow(_("   id {mid} on {n} files")
-                                .format(mid=i, n=len(names))))
-            for nm in names:
-                info("      " + dim(nm[:76]))
-            suspect.append({"file": names[0],
-                            "reason": _("   id {mid} on {n} files")
-                            .format(mid=i, n=len(names))})
-
-    info("")
-    if fixed:
-        info(bold(green(_("{n} NFO(s) set aside").format(n=len(fixed))))
-             + (dim(_("  (dry run)")) if dry else ""))
-        if not dry:
-            info(dim(_("   Undo: tmdbtag --undo {n}").format(n=len(fixed))))
-        info(dim(_("   Now in Jellyfin: Library -> Scan with 'Replace metadata'")))
-    if not suspect:
-        if not fixed:
-            info(bold(green(_("All {n} tags look plausible.").format(n=len(tagged)))))
-        return 0
-    info(bold(yellow(_("{n} of {total} suspect").format(n=len(suspect), total=len(tagged)))))
-    if report:
-        written = write_report(report, suspect)
-        if written:
-            info(f"   → {written}")
-            info(dim(_("   Fix them: tmdbtag --from-report --force")))
-    return 0
+    suspect += _duplicate_ids(by_id)
+    return _verify_summary(len(tagged), suspect, fixed, report, dry)
 
 
 def undo_last(count: int, dry: bool):
@@ -1865,24 +1904,99 @@ def main() -> int:
     return run_tagging(tmdb, files, args, report_path)
 
 
+def _drop_already_tagged(files: list[Path], args) -> tuple[list[Path], int]:
+    """Bereits getaggte Dateien vorab aussortieren, statt 600 Zeilen
+    "übersprungen" auszugeben, in denen die eigentliche Arbeit untergeht."""
+    if not (args.rename and not args.force):
+        return files, 0
+    already = [f for f in files if TAG_RE.search(f.name)]
+    if already:
+        info(dim(_("{n} already tagged → skipped").format(n=len(already))))
+    return [f for f in files if not TAG_RE.search(f.name)], len(already)
+
+
+def _progress_header(f: Path, idx: int, total: int, started: float) -> str:
+    """Zähler, ETA und Dateiname — die Kopfzeile pro Datei."""
+    eta = ""
+    if idx > 3:
+        per = (time.time() - started) / (idx - 1)
+        left = int(per * (total - idx + 1))
+        eta = dim(_(" ~{m}:{s:02d} left").format(m=left // 60, s=left % 60)) if left > 45 else ""
+    counter = dim(f"[{idx:>{len(str(total))}}/{total}]") + eta + " "
+    return f"{counter}{bold(f.name)}"
+
+
+def _resolve_movie(tmdb: Tmdb, f: Path, args, mode: str, header: str,
+                   unresolved: list[dict]) -> tuple[dict | None, str | None]:
+    """Den Film zu einer Datei bestimmen — aus dem vorhandenen Tag oder per Suche.
+
+    Gibt (Film, IMDb-ID) zurück; TmdbUnavailable reicht sie an den Aufrufer
+    durch, der die Fehlerserie zählt.
+    """
+    tagged = TAG_RE.search(f.name)
+    movie = None
+
+    if tagged and not args.force:
+        # --no-rename: ID steht schon im Namen, nur Details für die NFO holen
+        info(header)
+        movie = tmdb.details(int(re.search(r"\d+", tagged.group()).group()))
+        if movie:
+            info("   " + dim(_("tag in name: #{id} {title}")
+                         .format(id=movie["id"], title=movie.get("title", ""))))
+
+    if movie is None:
+        title, year = parse_release(source_name(f))
+        info(header)
+        info("   " + dim(_('detected: "{title}"').format(title=title)
+                     + (f" ({year})" if year else _(" (no year)"))))
+
+        cands = find_candidates(tmdb, title, year)
+        movie = choose(cands, title, year, mode, tmdb, unresolved, f)
+
+    imdb = None
+    if movie and args.imdb:
+        imdb = (tmdb.details(movie["id"]) or {}).get("imdb_id")
+    return movie, imdb
+
+
+def _tagging_summary(done: int, skipped: int, failed: int, unresolved: list[dict],
+                     args, report_path: Path) -> int:
+    parts = [_("{n} tagged").format(n=done), _("{n} skipped").format(n=skipped)]
+    if failed:
+        parts.append(_("{n} errors").format(n=failed))
+    info(bold(_("Done: ") + ", ".join(parts))
+         + (dim(_("  (dry run)")) if args.dry_run else ""))
+
+    if args.dry_run:
+        # Ein Trockenlauf darf den Report nicht anfassen: er gehört zum letzten
+        # echten Lauf, unter Umständen über ganz andere Ordner.
+        if unresolved:
+            info(yellow(_("{n} cases would be deferred")
+                        .format(n=len(unresolved))))
+        return 0
+
+    had_report = report_path.exists()
+    written = write_report(report_path, unresolved)
+    if written:
+        info(yellow(_("{n} cases deferred").format(n=len(unresolved))) + f" → {written}")
+        info(dim(_("   Follow up: tmdbtag --from-report")))
+    elif had_report:
+        info(dim(_("Nothing left open — removed stale report {name}.").format(name=report_path.name)))
+
+    if done:
+        info(dim(_("Now in Jellyfin: Library → Scan (tick 'Replace metadata' if needed).")))
+    return 0
+
+
 def run_tagging(tmdb: Tmdb, files: list[Path], args, report_path: Path) -> int:
     """Der eigentliche Durchlauf: auflösen, taggen, offene Fälle sammeln."""
     mode = ("yes" if args.yes else "batch" if args.batch
             else "auto" if args.auto else "ask")
     roots = {Path(p).expanduser().resolve() for p in args.paths}
-    done = skipped = failed = 0
+    done = failed = net_errors = 0
     unresolved: list[dict] = []
-    net_errors = 0
 
-    # Bereits getaggte Dateien vorab aussortieren, statt 600 Zeilen
-    # "übersprungen" auszugeben, in denen die eigentliche Arbeit untergeht.
-    if args.rename and not args.force:
-        already = [f for f in files if TAG_RE.search(f.name)]
-        files = [f for f in files if not TAG_RE.search(f.name)]
-        skipped += len(already)
-        if already:
-            info(dim(_("{n} already tagged → skipped").format(n=len(already))))
-
+    files, skipped = _drop_already_tagged(files, args)
     total = len(files)
     if not total:
         info(bold(_("Nothing to do — everything is already tagged.")))
@@ -1894,37 +2008,9 @@ def run_tagging(tmdb: Tmdb, files: list[Path], args, report_path: Path) -> int:
 
     started = time.time()
     for idx, f in enumerate(files, 1):
-        eta = ""
-        if idx > 3:
-            per = (time.time() - started) / (idx - 1)
-            left = int(per * (total - idx + 1))
-            eta = dim(_(" ~{m}:{s:02d} left").format(m=left // 60, s=left % 60)) if left > 45 else ""
-        counter = dim(f"[{idx:>{len(str(total))}}/{total}]") + eta + " "
-        header = f"{counter}{bold(f.name)}"
-        tagged = TAG_RE.search(f.name)
-        movie = None
-
+        header = _progress_header(f, idx, total, started)
         try:
-            if tagged and not args.force:
-                # --no-rename: ID steht schon im Namen, nur Details für die NFO holen
-                info(header)
-                movie = tmdb.details(int(re.search(r"\d+", tagged.group()).group()))
-                if movie:
-                    info("   " + dim(_("tag in name: #{id} {title}")
-                                 .format(id=movie["id"], title=movie.get("title", ""))))
-
-            if movie is None:
-                title, year = parse_release(source_name(f))
-                info(header)
-                info("   " + dim(_('detected: "{title}"').format(title=title)
-                             + (f" ({year})" if year else _(" (no year)"))))
-
-                cands = find_candidates(tmdb, title, year)
-                movie = choose(cands, title, year, mode, tmdb, unresolved, f)
-
-            imdb = None
-            if movie and args.imdb:
-                imdb = (tmdb.details(movie["id"]) or {}).get("imdb_id")
+            movie, imdb = _resolve_movie(tmdb, f, args, mode, header, unresolved)
         except TmdbUnavailable as e:
             err(_("   TMDB unreachable: {e} → skipped").format(e=e))
             unresolved.append({"file": str(f), "reason": _("network error: {e}").format(e=e)})
@@ -1948,31 +2034,7 @@ def run_tagging(tmdb: Tmdb, files: list[Path], args, report_path: Path) -> int:
         done += 1
         info("")
 
-    parts = [_("{n} tagged").format(n=done), _("{n} skipped").format(n=skipped)]
-    if failed:
-        parts.append(_("{n} errors").format(n=failed))
-    info(bold(_("Done: ") + ", ".join(parts))
-         + (dim(_("  (dry run)")) if args.dry_run else ""))
-
-    if args.dry_run:
-        # Ein Trockenlauf darf den Report nicht anfassen: er gehört zum letzten
-        # echten Lauf, unter Umständen über ganz andere Ordner.
-        if unresolved:
-            info(yellow(_("{n} cases would be deferred")
-                        .format(n=len(unresolved))))
-        return 0
-
-    had_report = report_path.exists()
-    written = write_report(report_path, unresolved)
-    if written:
-        info(yellow(_("{n} cases deferred").format(n=len(unresolved))) + f" → {written}")
-        info(dim(_("   Follow up: tmdbtag --from-report")))
-    elif had_report:
-        info(dim(_("Nothing left open — removed stale report {name}.").format(name=report_path.name)))
-
-    if done and not args.dry_run:
-        info(dim(_("Now in Jellyfin: Library → Scan (tick 'Replace metadata' if needed).")))
-    return 0
+    return _tagging_summary(done, skipped, failed, unresolved, args, report_path)
 
 
 if __name__ == "__main__":
