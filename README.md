@@ -80,6 +80,14 @@ To **re-identify** a single file, pass it directly — even if it already carrie
 The picker comes up and the old tag is replaced rather than appended to. Passing a
 subtitle or `.nfo` by mistake switches to the video it belongs to.
 
+### Release folders with obfuscated files
+
+Many keep each release as a folder named after the scene release, with a shortened file
+inside (`Some.Film.2019.German.DL.1080p.BluRay.x264-GRP/grp-sf-1080p.mkv`). When the
+filename has no year but the folder looks like a release (year followed by tokens like
+`1080p` or `BluRay`), the folder name is searched instead. Collection folders such as
+`Western Collection` or `Movies 2024` are not mistaken for releases.
+
 ### Runtime as a tiebreaker
 
 Two films can share a title *and* a year — `Odila` (2024) is both a singer biopic

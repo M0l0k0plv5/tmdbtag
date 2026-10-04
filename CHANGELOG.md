@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Release folders with an obfuscated file inside
+  (`Some.Film.2019.…-GRP/grp-sf-1080p.mkv`) are now matched by the folder name
+  when the filename carries no year. Collection folders are not mistaken for
+  releases.
+
 ## v2.0.0 — 2026-10-04
 
 ### Breaking: three modes instead of 27 flags

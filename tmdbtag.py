@@ -489,10 +489,30 @@ def year_of(result: dict) -> int | None:
 # Suche mit Fallbacks
 # --------------------------------------------------------------------------- #
 
+def looks_like_release(name: str) -> bool:
+    """Jahr plus mindestens ein Release-Token dahinter ("…2019.1080p.…").
+
+    Unterscheidet einen Szene-Ordner von Sammelordnern wie "Movies 2024"
+    oder "Western Collection", deren Name nichts über den Film verrät.
+    """
+    tokens = tokenize(name)
+    for i, tok in enumerate(tokens[1:], 1):
+        if YEAR_RE.match(tok):
+            return any(is_stop(x, hard_only=True) for x in tokens[i + 1:])
+    return False
+
+
 def source_name(f: Path) -> str:
-    """Woraus der Suchtitel gelesen wird — Dateiname, sonst der Ordner."""
+    """Woraus der Suchtitel gelesen wird — Dateiname, sonst der Ordner.
+
+    Viele behalten Releases als Ordner mit dem Szenennamen, die Datei darin
+    heißt abgekürzt ("grp-somefilm-1080p.mkv"). Fehlt dem Dateinamen das
+    Jahr, der Ordner aber sieht nach Release aus, ist er die bessere Quelle.
+    """
     if (len(re.sub(r"[^a-zA-Z]", "", f.stem)) < 5
             or f.stem.lower() in {"movie", "video", "film", "vts_01_1", "index"}):
+        return f.parent.name
+    if parse_release(f.stem)[1] is None and looks_like_release(f.parent.name):
         return f.parent.name
     return f.stem
 

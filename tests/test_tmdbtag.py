@@ -92,6 +92,33 @@ class TestParseRelease(unittest.TestCase):
                          ("The Glass Harbor", 1999))
 
 
+class TestSourceName(unittest.TestCase):
+    """Releases liegen oft als Ordner mit Szenennamen vor, die Datei darin
+    ist abgekürzt — dann muss der Ordner die Suchquelle sein."""
+
+    REL = "Some.Film.2019.German.DL.1080p.BluRay.x264-GRP"
+
+    def src(self, rel):
+        return t.source_name(Path("/lib") / rel)
+
+    def test_obfuscated_file_in_release_folder_uses_folder(self):
+        self.assertEqual(self.src(f"{self.REL}/grp-somefilm-1080p.mkv"), self.REL)
+
+    def test_generic_file_uses_folder(self):
+        self.assertEqual(self.src(f"{self.REL}/movie.mkv"), self.REL)
+
+    def test_full_scene_filename_wins_over_folder(self):
+        f = "Other.Movie.2005.1080p.BluRay.x264-XYZ"
+        self.assertEqual(self.src(f"{self.REL}/{f}.mkv"), f)
+
+    def test_collection_folder_is_not_a_release(self):
+        # Kein Jahr im Ordner: der Dateiname bleibt Quelle, auch ohne Jahr
+        self.assertEqual(self.src("Western Collection/Dusty.Trails.mkv"), "Dusty.Trails")
+
+    def test_folder_with_year_but_no_release_tokens_is_ignored(self):
+        self.assertEqual(self.src("Movies 2024/Dusty.Trails.mkv"), "Dusty.Trails")
+
+
 class TestScoring(unittest.TestCase):
     def test_norm_ignores_articles_and_diacritics(self):
         self.assertEqual(t.norm("Der Hut des Schamanen"), t.norm("Hut des Schamanen"))
@@ -201,6 +228,9 @@ DB = {
     "glass harbor": {"id": 603, "title": "Glass Harbor", "original_title": "The Glass Harbor",
                "release_date": "1999-03-30", "popularity": 80,
                "overview": "Ein Lotse im Nebel."},
+    "some film": {"id": 4242, "title": "Some Film", "original_title": "Some Film",
+                  "release_date": "2019-05-01", "popularity": 5,
+                  "overview": "Erfundener Film für Tests."},
 }
 
 
@@ -273,6 +303,12 @@ class TestEndToEnd(E2EBase):
         before = self.names()
         self.run_cli("-n", str(self.tmp))
         self.assertEqual(before, self.names())
+
+    def test_obfuscated_file_matched_via_release_folder(self):
+        d = "Some.Film.2019.German.DL.1080p.BluRay.x264-GRP"
+        self.make(f"{d}/grp-sf-1080p.mkv")
+        self.run_cli(str(self.tmp))
+        self.assertIn(f"{d}/grp-sf-1080p [tmdbid-4242].mkv", self.names())
 
     def test_already_tagged_is_skipped(self):
         p = self.make("flat/The.Glass.Harbor.1999 [tmdbid-603].mkv")
