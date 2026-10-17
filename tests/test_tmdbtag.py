@@ -1083,6 +1083,23 @@ class TestTvHint(E2EBase):
     """Miniserien haben oft keinen Film-Eintrag — dann darf nicht der
     ähnlichste Film getaggt werden."""
 
+    def test_episode_marker_detected(self):
+        for name in ("Glass.Harbor.S01E03.German.1080p.WEB-GRP",
+                     "grp-glass.harbor.e07.1080p",
+                     "Glass Harbor - s2e11 - Nebel"):
+            self.assertTrue(t.is_episode(name), name)
+        for name in ("Glass.Harbor.1999.German.1080p.BluRay-GRP",
+                     "Der.Leuchtturm.1981.Season.Finale.German-GRP",
+                     "E1.1999.German.1080p-GRP"):
+            self.assertFalse(t.is_episode(name), name)
+
+    def test_episode_is_never_tagged_as_the_film(self):
+        # "Glass Harbor" gibt es als Film — die Folge darf ihn trotzdem nicht bekommen
+        self.make("f/Glass.Harbor.S01E01.German.1080p.WEB.H264-GRP.mkv")
+        _, out = self.run_cli(str(self.tmp))
+        self.assertIn("shows library", out)
+        self.assertIn("f/Glass.Harbor.S01E01.German.1080p.WEB.H264-GRP.mkv", self.names())
+
     def test_reports_a_series_instead_of_guessing_a_film(self):
         real = t.Tmdb._get
 

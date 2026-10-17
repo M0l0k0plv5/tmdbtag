@@ -139,6 +139,8 @@ _DE = {
         "Laufzeit {mins} min → ",
     "no film, but TV series #{id} \"{name}\" — belongs in the shows library":
         "kein Film, aber TV-Serie #{id} \"{name}\" — gehört in die Serien-Bibliothek",
+    "episode of a series → belongs in the shows library":
+        "Folge einer Serie → gehört in die Serien-Bibliothek",
     "uncertain → skipped: ":
         "unsicher → übersprungen: ",
     "no TMDB match":
@@ -414,6 +416,18 @@ def parse_release(name: str) -> tuple[str, int | None]:
     title = " ".join(tokens[:end]).strip(" -–")
     title = re.sub(r"\s+", " ", title)
     return title, year
+
+
+EPISODE_RE = re.compile(r"^(s\d{1,2}e\d{1,3}|e\d{1,3})$", re.I)
+
+
+def is_episode(name: str) -> bool:
+    """Trägt der Name eine Folgenkennung (S01E02, E02)?
+
+    Serienfolgen gehören nie in die Film-Bibliothek. Ohne diese Prüfung
+    tagt die Suche "Psycho-Pass S01E01" sicher als "Psycho-Pass: The Movie".
+    """
+    return any(EPISODE_RE.match(tok) for tok in tokenize(name)[1:])
 
 
 def nfc(s: str) -> str:
@@ -1527,6 +1541,9 @@ def _resolve_movie(tmdb: Tmdb, f: Path, mode: str, header: str) -> dict | None:
                          .format(id=mid, title=(current or {}).get("title", "?"))))
     info("   " + dim(_('detected: "{title}"').format(title=title)
                      + (f" ({year})" if year else _(" (no year)"))))
+    if is_episode(strip_tag(source_name(f))):
+        info("   " + yellow(_("episode of a series → belongs in the shows library")))
+        return None
     cands = find_candidates(tmdb, title, year)
     return choose(cands, title, year, mode, tmdb, f)
 

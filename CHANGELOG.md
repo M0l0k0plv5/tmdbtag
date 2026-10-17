@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Series episodes (`S01E02`, `E02` in the name) are never tagged as a film
+  any more. Before, `Some.Show.S01E01` could land on a film of the same
+  name; now it is skipped with a hint that it belongs in the shows library.
 - Release folders with an obfuscated file inside
   (`Some.Film.2019.…-GRP/grp-sf-1080p.mkv`) are now matched by the folder name
   when the filename carries no year. Collection folders are not mistaken for
