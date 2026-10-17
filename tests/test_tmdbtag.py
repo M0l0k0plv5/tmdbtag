@@ -1,4 +1,4 @@
-"""Tests für tmdbtag — reine Standardbibliothek, kein pytest nötig.
+"""Tests for tmdbtag — standard library only, no pytest needed.
 
     python3 -m unittest discover -s tests -v
 """
@@ -47,8 +47,8 @@ class TestParseRelease(unittest.TestCase):
         ("Reactor.2.Final.Hour.1991.1080p.BluRay.x264", "Reactor 2 Final Hour", 1991),
         ("Wolfsbane_1922_720p_BluRay", "Wolfsbane", 1922),
         ("Renee [2001] 1080p", "Renee", 2001),
-        # "Web" ist hier Titelwort, nicht die Quellenangabe: der Titel wurde
-        # bei "Iron" abgeschnitten und der falsche Film getaggt.
+        # "Web" is a title word here, not the source: the title used to be
+        # cut off at "Iron" and the wrong film got tagged.
         ("Iron.Web.A.Night.in.Kyoto.2023.German.DL.EAC3.1080p.WEB.H265-GRP",
          "Iron Web A Night in Kyoto", 2023),
         ("Open.Fields.2003.German.DL.1080p.BluRay.x264-GRP", "Open Fields", 2003),
@@ -61,12 +61,12 @@ class TestParseRelease(unittest.TestCase):
                 self.assertEqual(t.parse_release(name), (title, year))
 
     def test_soft_token_still_stops_without_a_year(self):
-        """Ohne Jahr fehlt die verlässliche Grenze — dann muss 'WEB' greifen."""
+        """Without a year the reliable boundary is missing — then 'WEB' has to apply."""
         self.assertEqual(t.parse_release("Some.Film.WEB.H265-GRP"),
                          ("Some Film", None))
 
     def test_hard_token_still_stops_before_the_year(self):
-        """'German' bleibt hart: sonst hiesse der Titel 'Der Film German'."""
+        """'German' stays hard: otherwise the title would be 'Der Film German'."""
         self.assertEqual(t.parse_release("Der.Film.German.2019.1080p.BluRay-GRP"),
                          ("Der Film", 2019))
         self.assertEqual(t.parse_release("Some.Film.1080p.2019.BluRay-GRP"),
@@ -77,7 +77,7 @@ class TestParseRelease(unittest.TestCase):
                          ("Some Obscure Film", None))
 
     def test_year_at_index_zero_stays_in_title(self):
-        # "1934" ohne Jahresangabe darf nicht als Jahr weginterpretiert werden
+        # "1934" without a year must not be taken for the year
         title, year = t.parse_release("1934.1080p.BluRay.x264")
         self.assertEqual(title, "1934")
         self.assertIsNone(year)
@@ -93,8 +93,8 @@ class TestParseRelease(unittest.TestCase):
 
 
 class TestSourceName(unittest.TestCase):
-    """Releases liegen oft als Ordner mit Szenennamen vor, die Datei darin
-    ist abgekürzt — dann muss der Ordner die Suchquelle sein."""
+    """Releases often come as a folder with the scene name and an abbreviated
+    file inside — then the folder has to be the search source."""
 
     REL = "Some.Film.2019.German.DL.1080p.BluRay.x264-GRP"
 
@@ -112,7 +112,7 @@ class TestSourceName(unittest.TestCase):
         self.assertEqual(self.src(f"{self.REL}/{f}.mkv"), f)
 
     def test_collection_folder_is_not_a_release(self):
-        # Kein Jahr im Ordner: der Dateiname bleibt Quelle, auch ohne Jahr
+        # No year in the folder: the file name stays the source, even without a year
         self.assertEqual(self.src("Western Collection/Dusty.Trails.mkv"), "Dusty.Trails")
 
     def test_folder_with_year_but_no_release_tokens_is_ignored(self):
@@ -137,7 +137,7 @@ class TestScoring(unittest.TestCase):
 
 
 class TestUmlauts(unittest.TestCase):
-    """Scene-Releases schreiben Umlaute als ae/oe/ue aus."""
+    """Scene releases spell umlauts out as ae/oe/ue."""
 
     PAIRS = [
         ("Die Faehre", "Die Fähre"),
@@ -154,8 +154,8 @@ class TestUmlauts(unittest.TestCase):
                 self.assertGreaterEqual(t.similarity(scene, real), 0.95)
 
     def test_folding_does_not_break_normal_titles(self):
-        # 'ue' in 'Queen' wird mitgefaltet — darf den Vergleich nicht ruinieren,
-        # weil similarity() zusätzlich die ungefaltete Variante prüft.
+        # 'ue' in 'Queen' gets folded too — that must not ruin the comparison,
+        # because similarity() also checks the unfolded variant.
         self.assertEqual(t.similarity("Queen", "Queen"), 1.0)
         self.assertLess(t.similarity("Queen", "Quentin Talbot"), 0.7)
 
@@ -164,7 +164,7 @@ class TestUmlauts(unittest.TestCase):
         self.assertEqual(t.unfold_umlauts("Ueber uns"), "Über uns")
 
     def test_search_retries_with_umlaut_spelling(self):
-        """Regression: der Umlaut-Fallback muss die Suche erreichen."""
+        """Regression: the umlaut fallback has to reach the search."""
         seen = []
 
         class FakeTmdb:
@@ -172,7 +172,7 @@ class TestUmlauts(unittest.TestCase):
 
             def search(self, q, y, lang=None):
                 seen.append(q)
-                # Nur die echte Umlaut-Schreibweise liefert einen Treffer
+                # Only the real umlaut spelling yields a hit
                 if "Fähre" in q:
                     return [{"id": 22954, "title": "Die Fähre",
                              "original_title": "Die Fähre",
@@ -181,11 +181,11 @@ class TestUmlauts(unittest.TestCase):
 
         got = t.find_candidates(FakeTmdb(), "Die Faehre", 2009)
         self.assertTrue(any("Fähre" in q for q in seen),
-                        f"Umlaut-Variante nie gesucht, nur: {seen}")
+                        f"umlaut variant never searched, only: {seen}")
         self.assertEqual([r["id"] for r in got], [22954])
 
     def test_search_stops_early_on_strong_hit(self):
-        """Kein unnötiger zweiter Request, wenn der erste sitzt."""
+        """No needless second request when the first one hits."""
         calls = []
 
         class FakeTmdb:
@@ -197,7 +197,7 @@ class TestUmlauts(unittest.TestCase):
                          "release_date": "1981-09-17", "popularity": 30}]
 
         t.find_candidates(FakeTmdb(), "Der Leuchtturm", 1981)
-        self.assertEqual(len(calls), 1, f"zu viele Requests: {calls}")
+        self.assertEqual(len(calls), 1, f"too many requests: {calls}")
 
 
 class TestNaming(unittest.TestCase):
@@ -218,19 +218,19 @@ class TestNaming(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
-# Ende-zu-Ende gegen eine gefälschte TMDB-API
+# End to end against a fake TMDB API
 # --------------------------------------------------------------------------- #
 
 DB = {
     "der leuchtturm": {"id": 387, "title": "Der Leuchtturm", "original_title": "Der Leuchtturm",
                  "release_date": "1981-09-17", "popularity": 30,
-                 "overview": "Ein Wärter allein.", "imdb_id": "tt1234567"},
+                 "overview": "A keeper alone.", "imdb_id": "tt1234567"},
     "glass harbor": {"id": 603, "title": "Glass Harbor", "original_title": "The Glass Harbor",
                "release_date": "1999-03-30", "popularity": 80,
-               "overview": "Ein Lotse im Nebel."},
+               "overview": "A pilot in the fog."},
     "some film": {"id": 4242, "title": "Some Film", "original_title": "Some Film",
                   "release_date": "2019-05-01", "popularity": 5,
-                  "overview": "Erfundener Film für Tests."},
+                  "overview": "Invented film for tests."},
 }
 
 
@@ -246,8 +246,8 @@ def fake_get(self, path, **p):
 
 class E2EBase(unittest.TestCase):
     def setUp(self):
-        # Jeden angefassten Modulzustand sichern — sonst hängt das Ergebnis
-        # eines Tests davon ab, welcher vorher lief.
+        # Save every piece of module state we touch — otherwise a test's result
+        # depends on which test ran before it.
         self._saved = {n: getattr(t, n)
                        for n in ("load_key", "LOG_FILE", "CONFIG_DIR", "CONFIG_FILE")}
         self._real_get = t.Tmdb._get
@@ -278,7 +278,7 @@ class E2EBase(unittest.TestCase):
         return rc, buf.getvalue()
 
     def run_small(self, workers=6):
-        """Lauf mit Mini-Testdateien: Mindestgröße aus, Parallelität gesetzt."""
+        """Run with tiny test files: minimum size off, parallelism set."""
         with mock.patch.object(t, "WORKERS", workers), mock.patch.object(t, "MIN_SIZE", 0):
             return self.run_cli(str(self.tmp))
 
@@ -317,7 +317,7 @@ class TestEndToEnd(E2EBase):
 
     def test_sample_and_small_files_ignored(self):
         self.make("flat/sample.mkv", 1024)
-        self.make("flat/The.Glass.Harbor.1999.1080p-GRP.mkv", 1024)  # unter --min-size
+        self.make("flat/The.Glass.Harbor.1999.1080p-GRP.mkv", 1024)  # below the minimum size
         with self.assertRaises(SystemExit) as cm:
             self.run_cli(str(self.tmp))
         self.assertIn("No video files found", str(cm.exception))
@@ -331,7 +331,7 @@ class TestEndToEnd(E2EBase):
         self.assertIn("flat/Der.Leuchtturm.1981.German.1080p.BluRay.x264-GRP [tmdbid-387].mkv", got)
 
     def test_log_written_incrementally(self):
-        """Nach einem Abbruch mitten im Lauf muss undo trotzdem greifen."""
+        """After an abort in the middle of a run, undo still has to work."""
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-AAA.mkv")
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-BBB.mkv")
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-CCC.mkv")
@@ -352,9 +352,9 @@ class TestEndToEnd(E2EBase):
         finally:
             t.Tmdb._get = real
 
-        self.assertTrue(t.LOG_FILE.exists(), "Log fehlt nach Abbruch")
+        self.assertTrue(t.LOG_FILE.exists(), "log missing after abort")
         rows = [json.loads(l) for l in t.LOG_FILE.read_text().splitlines() if l.strip()]
-        self.assertGreater(len(rows), 0, "kein Rename protokolliert — undo unmöglich")
+        self.assertGreater(len(rows), 0, "no rename logged — undo impossible")
 
     def test_undo_restores_names(self):
         d = "Der.Leuchtturm.1981.German.DL.1080p.BluRay.x264-GRP"
@@ -394,12 +394,12 @@ class TestEndToEnd(E2EBase):
 
 
 class TestUnicodeFilenames(E2EBase):
-    """macOS mischt NFC- und NFD-Dateinamen — sichtbar identisch, verschiedene Strings."""
+    """macOS mixes NFC and NFD file names — visibly identical, different strings."""
 
     REL = "Der.Leuchtturm.1981.Ueber.German.1080p.BluRay.x264-GRP"
 
     def test_nfd_sidecar_is_found_and_renamed(self):
-        """Regression: NFD-Untertitel zu NFC-Video blieb liegen und verwaiste."""
+        """Regression: an NFD subtitle next to an NFC video was left behind, orphaned."""
         import unicodedata as ud
         base = "Der.Leuchtturm.1981.Blödsinn.German.1080p.BluRay.x264-GRP"
         video = self.make(f"x/{ud.normalize('NFC', base)}.mkv")
@@ -408,10 +408,10 @@ class TestUnicodeFilenames(E2EBase):
 
         found = t.sidecars(video)
         self.assertEqual([f.name for f in found], [srt.name],
-                         "NFD-Sidecar nicht gefunden")
+                         "NFD sidecar not found")
 
     def test_mixed_normalization_slices_correctly(self):
-        """Regression: der Längen-Index zerschnitt den Namen bei jedem Umlaut."""
+        """Regression: the length index cut into the name at every umlaut."""
         import unicodedata as ud
         base = "Film.mit.Ümläüten.2009"
         video = self.make(f"x/{ud.normalize('NFC', base)}.mkv", 10)
@@ -436,17 +436,17 @@ class TestUnicodeFilenames(E2EBase):
         self.run_cli(str(self.tmp))
         new = next(p for p in (self.tmp / "x").iterdir() if p.suffix == ".mkv")
         self.assertEqual(new.name, ud.normalize("NFC", new.name),
-                         "Zielname ist nicht NFC-normalisiert")
+                         "target name is not NFC-normalized")
 
 
 class TestUnattended(E2EBase):
-    """Ohne Terminal (cron, Pipe) läuft alles durch — kein input(), kein Abbruch."""
+    """Without a terminal (cron, pipe) everything runs through — no input(), no abort."""
 
     def test_uncertain_match_is_skipped_not_prompted(self):
-        # "Ironbridges 1979" existiert nicht (Ironbridge=1979, Ironbridges=1986) -> unsicher
+        # "Ironbridges 1979" doesn't exist (Ironbridge=1979, Ironbridges=1986) -> uncertain
         self.make("f/Ironbridges.1979.Special.Edition.German.DL.1080p.BluRay.x264-GRP.mkv")
         with mock.patch("builtins.input",
-                        side_effect=AssertionError("ohne Terminal interaktiv nachgefragt")):
+                        side_effect=AssertionError("asked interactively without a terminal")):
             _, out = self.run_cli(str(self.tmp))
         self.assertIn("f/Ironbridges.1979.Special.Edition.German.DL.1080p.BluRay.x264-GRP.mkv",
                       self.names())
@@ -457,7 +457,7 @@ class TestUnattended(E2EBase):
         with mock.patch("builtins.input", return_value="s") as ask, \
                 mock.patch.object(sys.stdin, "isatty", return_value=True):
             self.run_cli(str(self.tmp))
-        self.assertTrue(ask.called, "im Terminal nicht nachgefragt")
+        self.assertTrue(ask.called, "not asked in a terminal")
 
     def test_confident_matches_are_tagged_without_asking(self):
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-GRP.mkv")
@@ -468,7 +468,7 @@ class TestUnattended(E2EBase):
         self.assertIn("f/Ironbridges.1979.Special.Edition.German.1080p-GRP.mkv", got)
 
     def test_network_error_skips_file_and_continues(self):
-        """Ein Aussetzer darf nicht den ganzen Lauf über tausende Dateien töten."""
+        """One hiccup must not kill a whole run over thousands of files."""
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-AAA.mkv")
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-ZZZ.mkv")
         calls = {"n": 0}
@@ -477,7 +477,7 @@ class TestUnattended(E2EBase):
         def flaky(self, path, **p):
             calls["n"] += 1
             if calls["n"] == 1:
-                raise t.TmdbUnavailable("Verbindung abgebrochen")
+                raise t.TmdbUnavailable("connection dropped")
             return real(self, path, **p)
 
         t.Tmdb._get = flaky
@@ -487,7 +487,7 @@ class TestUnattended(E2EBase):
             t.Tmdb._get = real
         self.assertEqual(rc, 0)
         self.assertIn("1 errors", out)
-        # die zweite Datei wurde trotzdem verarbeitet
+        # the second file was processed anyway
         self.assertIn("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-ZZZ [tmdbid-387].mkv",
                       self.names())
 
@@ -496,7 +496,7 @@ class TestUnattended(E2EBase):
             self.make(f"f/Film{i}.Der.Leuchtturm.1981.German.1080p-GRP.mkv")
 
         def dead(self, path, **p):
-            raise t.TmdbUnavailable("kein Netz")
+            raise t.TmdbUnavailable("no network")
 
         real, t.Tmdb._get = t.Tmdb._get, dead
         try:
@@ -507,7 +507,7 @@ class TestUnattended(E2EBase):
         self.assertIn("Five consecutive errors", out)
 
     def test_tagged_files_summarised_not_listed(self):
-        """Viele Zeilen 'übersprungen' verdecken sonst die eigentliche Arbeit."""
+        """Many 'skipped' lines would otherwise bury the actual work."""
         for i in range(5):
             self.make(f"f/Film{i}.1999 [tmdbid-{600+i}].mkv")
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-GRP.mkv")
@@ -515,7 +515,7 @@ class TestUnattended(E2EBase):
         self.assertIn("5 already tagged", out)
         self.assertNotIn("already tagged → skipped\n[", out)
         self.assertIn("1 to process", out)
-        self.assertIn("[1/1]", out)          # Zähler zählt nur echte Arbeit
+        self.assertIn("[1/1]", out)          # the counter only counts real work
 
     def test_nothing_to_do_exits_early(self):
         self.make("f/Film.1999 [tmdbid-603].mkv")
@@ -524,7 +524,7 @@ class TestUnattended(E2EBase):
         self.assertIn("Nothing to do", out)
 
     def test_apple_double_files_ignored(self):
-        """macOS legt auf SMB ._Name-Beifänger an — kein stat() dafür."""
+        """macOS creates ._Name sidecars on SMB — no stat() for them."""
         self.make("f/Der.Leuchtturm.1981.German.1080p-GRP.mkv")
         (self.tmp / "f" / "._Der.Leuchtturm.1981.German.1080p-GRP.mkv").write_bytes(b"x" * 100)
         got = t.collect([str(self.tmp)], 0)
@@ -544,31 +544,31 @@ class TestCheck(E2EBase):
         self.assertIn("plausible", out)
 
     def test_verify_flags_wrong_title(self):
-        # Tag zeigt auf Der Leuchtturm (#387), Datei ist ein ganz anderer Film
+        # the tag points to Der Leuchtturm (#387), the file is an entirely different film
         self.make("f/The.Glass.Harbor.1999.German.1080p.BluRay.x264-GRP [tmdbid-387].mkv")
         rc, out = self.run_cli("check", str(self.tmp))
         self.assertIn("1 of 1 suspect", out)
         self.assertIn("title mismatch", out)
 
     def test_verify_accepts_german_subtitle_suffix(self):
-        """Fehlalarm-Klasse: die Datei trägt einen Zusatz, den TMDB nicht führt."""
+        """False alarm class: the file carries an addition TMDB doesn't list."""
         self.assertTrue(t.title_agrees("47 Alles ist anders als gedacht", "47"))
         self.assertTrue(t.title_agrees("Hanna Bergs Der Morast", "Der Morast"))
         self.assertTrue(t.title_agrees("Der Morast", "Hanna Bergs Der Morast"))
         self.assertTrue(t.title_agrees("7KM Sieben Kilometer", "7km"))
 
     def test_sequel_numbering_roman_or_arabic(self):
-        """Aus dem Lauf über die Sammlung: 'Der Hafen 02' vs 'Der Hafen - Teil II'."""
+        """From the run over the collection: 'Der Hafen 02' vs 'Der Hafen - Teil II'."""
         self.assertTrue(t.title_agrees("Der Hafen 02", "Der Hafen - Teil II"))
         self.assertTrue(t.title_agrees("Der Hafen 03", "Der Hafen - Teil III"))
         self.assertTrue(t.title_agrees("Bruno 4", "Bruno IV"))
-        # Einzelbuchstaben bleiben unangetastet
+        # single letters stay untouched
         self.assertEqual(t.norm("Agent X"), "agent x")
 
     def test_verify_still_rejects_different_films(self):
         self.assertFalse(t.title_agrees("The Glass Harbor", "Der Leuchtturm"))
         self.assertFalse(t.title_agrees("Skyman", "Nightwolf Rising"))
-        # zu kurz, um als Teilmenge zu zählen
+        # too short to count as contained
         self.assertFalse(t.title_agrees("Ob", "Obelisk"))
 
     def test_verify_accepts_tag_with_extra_title_words(self):
@@ -601,8 +601,8 @@ class TestCheck(E2EBase):
         self.assertIn("does not exist on TMDB", out)
 
     def test_verify_flags_nfo_that_overrides_filename(self):
-        """Dateiname trägt #405775, die danebenliegende NFO #106646 — und Jellyfin
-        nimmt die NFO, der Film bleibt also falsch zugeordnet."""
+        """The file name carries #405775, the NFO alongside #106646 — and Jellyfin
+        takes the NFO, so the film stays mismatched."""
         v = self.make("f/The.Hollow.Gate.2017.German.1080p-GRP [tmdbid-405775].mkv")
         v.with_suffix(".nfo").write_text(
             '<?xml version="1.0"?>\n<movie>\n  <title>The Copper Market</title>\n'
@@ -617,8 +617,8 @@ class TestCheck(E2EBase):
         nfo = v.with_suffix(".nfo")
         nfo.write_text("<movie><tmdbid>106646</tmdbid></movie>", encoding="utf-8")
         _, out = self.run_cli("check", str(self.tmp))
-        self.assertFalse(nfo.exists(), "NFO liegt noch im Weg")
-        self.assertTrue(nfo.with_suffix(".nfo.bak").exists(), "keine Sicherung angelegt")
+        self.assertFalse(nfo.exists(), "NFO is still in the way")
+        self.assertTrue(nfo.with_suffix(".nfo.bak").exists(), "no backup created")
         self.assertIn("NFO set aside", out)
 
     def test_fix_nfo_is_undoable(self):
@@ -627,14 +627,14 @@ class TestCheck(E2EBase):
         nfo.write_text("<movie><tmdbid>106646</tmdbid></movie>", encoding="utf-8")
         self.run_cli("check", str(self.tmp))
         self.run_cli("undo")
-        self.assertTrue(nfo.exists(), "undo hat die NFO nicht zurückgeholt")
+        self.assertTrue(nfo.exists(), "undo did not restore the NFO")
 
     def test_fix_nfo_dry_run_changes_nothing(self):
         v = self.make("f/The.Hollow.Gate.2017.German.1080p-GRP [tmdbid-405775].mkv")
         nfo = v.with_suffix(".nfo")
         nfo.write_text("<movie><tmdbid>106646</tmdbid></movie>", encoding="utf-8")
         _, out = self.run_cli("-n", "check", str(self.tmp))
-        self.assertTrue(nfo.exists(), "Trockenlauf hat die NFO verschoben")
+        self.assertTrue(nfo.exists(), "dry run moved the NFO")
         self.assertFalse(nfo.with_suffix(".nfo.bak").exists())
         self.assertIn("dry run", out)
 
@@ -643,16 +643,16 @@ class TestCheck(E2EBase):
         nfo = v.with_suffix(".nfo")
         nfo.write_text("<movie><tmdbid>387</tmdbid></movie>", encoding="utf-8")
         self.run_cli("check", str(self.tmp))
-        self.assertTrue(nfo.exists(), "korrekte NFO wurde angefasst")
+        self.assertTrue(nfo.exists(), "correct NFO was touched")
 
     def test_fix_nfo_does_not_clobber_an_existing_backup(self):
         v = self.make("f/The.Hollow.Gate.2017.German.1080p-GRP [tmdbid-405775].mkv")
         nfo = v.with_suffix(".nfo")
         nfo.write_text("<movie><tmdbid>106646</tmdbid></movie>", encoding="utf-8")
         old = nfo.with_suffix(".nfo.bak")
-        old.write_text("aeltere Sicherung", encoding="utf-8")
+        old.write_text("older backup", encoding="utf-8")
         self.run_cli("check", str(self.tmp))
-        self.assertEqual(old.read_text(), "aeltere Sicherung", "alte Sicherung überschrieben")
+        self.assertEqual(old.read_text(), "older backup", "old backup overwritten")
 
     def test_verify_accepts_matching_nfo(self):
         v = self.make("f/Der.Leuchtturm.1981.German.1080p-GRP [tmdbid-387].mkv")
@@ -663,7 +663,7 @@ class TestCheck(E2EBase):
         self.assertIn("plausible", out)
 
     def test_nfo_id_read_from_uniqueid_form(self):
-        """tmdbtag schreibt <uniqueid type="tmdb">, Jellyfin auch."""
+        """tmdbtag writes <uniqueid type="tmdb">, so does Jellyfin."""
         v = self.make("f/Film.2000 [tmdbid-42].mkv", 10)
         v.with_suffix(".nfo").write_text(
             '<movie><uniqueid type="tmdb" default="true">99</uniqueid></movie>',
@@ -679,8 +679,8 @@ class TestCheck(E2EBase):
         self.assertIn("plausible", out)
 
     def test_skipped_file_is_picked_up_by_the_next_run(self):
-        """Statt Report: was übersprungen wurde, bleibt ungetaggt und kommt
-        beim nächsten Lauf wieder dran — alles andere ist dann schon getaggt."""
+        """Instead of a report: whatever was skipped stays untagged and comes up
+        again on the next run — everything else is already tagged by then."""
         self.make("f/Ironbridges.1979.Special.Edition.German.1080p-GRP.mkv")
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-GRP.mkv")
         self.run_cli(str(self.tmp))
@@ -696,7 +696,7 @@ class TestParallelPrefetch(E2EBase):
             self.make(f"f/Der.Leuchtturm.198{i%10}.German.1080p.BluRay.x264-G{i:02d}.mkv", 10)
 
     def test_requests_actually_overlap(self):
-        """Belegt Nebenläufigkeit, nicht nur 'es stürzt nicht ab'."""
+        """Proves concurrency, not just 'it doesn't crash'."""
         import threading
         live = {"now": 0, "peak": 0}
         lock = threading.Lock()
@@ -720,7 +720,7 @@ class TestParallelPrefetch(E2EBase):
         finally:
             t.Tmdb._get = real
         self.assertGreater(live["peak"], 1,
-                           f"Anfragen liefen nacheinander (peak={live['peak']})")
+                           f"requests ran one after another (peak={live['peak']})")
 
     def test_workers_1_stays_sequential(self):
         import threading
@@ -752,15 +752,15 @@ class TestParallelPrefetch(E2EBase):
         real = t.Tmdb._get
 
         def counting(self, path, **p):
-            # _get ist die Methode, die den Cache hält — beim Patchen muss der
-            # Cache nachgebaut werden, sonst misst der Test ihn weg.
+            # _get is the method that holds the cache — when patching it, the
+            # cache has to be rebuilt, otherwise the test measures it away.
             key = (path, tuple(sorted(p.items())))
             if key in self._cache:
                 return self._cache[key]
             if p.get("query"):
-                # volle Kombination inklusive Endpunkt: dieselbe Phrase mit
-                # anderem Jahr, anderer Sprache oder gegen /search/tv ist eine
-                # andere Anfrage, kein Duplikat
+                # the full combination including the endpoint: the same phrase
+                # with another year, another language or against /search/tv is
+                # a different request, not a duplicate
                 calls.append((path, p["query"], p.get("year"), p.get("language")))
             self._cache[key] = real(self, path, **p)
             return self._cache[key]
@@ -774,9 +774,9 @@ class TestParallelPrefetch(E2EBase):
             self.run_cli(str(self.tmp))
         finally:
             t.Tmdb._get = real
-        # jede Query genau einmal — der Hauptlauf trifft den Cache
+        # every query exactly once — the main run hits the cache
         self.assertEqual(len(calls), len(set(calls)),
-                         f"doppelte Anfragen trotz Cache: {calls}")
+                         f"duplicate requests despite the cache: {calls}")
 
     def test_prefetch_error_does_not_abort_run(self):
         real = t.Tmdb._get
@@ -785,7 +785,7 @@ class TestParallelPrefetch(E2EBase):
         def flaky(self, path, **p):
             state["n"] += 1
             if state["n"] <= 2:
-                raise t.TmdbUnavailable("Aussetzer beim Vorabruf")
+                raise t.TmdbUnavailable("hiccup during prefetch")
             return real(self, path, **p)
 
         self._make_many(6)
@@ -798,13 +798,13 @@ class TestParallelPrefetch(E2EBase):
 
 
 class TestRuntimeTiebreaker(E2EBase):
-    """Laufzeit trennt gleichnamige Filme, wo Titel und Jahr nichts hergeben."""
+    """Runtime separates films of the same name where title and year don't help."""
 
     ODILA = [
         {"id": 1038263, "title": "Odila", "original_title": "Odila",
-         "release_date": "2024-08-29", "popularity": 3.8},      # Biopic, 123 min
+         "release_date": "2024-08-29", "popularity": 3.8},      # biopic, 123 min
         {"id": 1243381, "title": "Odila", "original_title": "Odile",
-         "release_date": "2024-12-06", "popularity": 3.0},      # Bibelfilm, 112 min
+         "release_date": "2024-12-06", "popularity": 3.0},      # biblical film, 112 min
     ]
     RUNTIMES = {1038263: 123, 1243381: 112}
 
@@ -824,8 +824,8 @@ class TestRuntimeTiebreaker(E2EBase):
         v = self.make("f/Odila.2024.German-GRP.mkv", 10)
         v.with_suffix(".nfo").write_text("<movie><runtime>112</runtime></movie>")
         got = t.by_runtime(self._tmdb(), self.ODILA, v)
-        self.assertIsNotNone(got, "kein Kandidat gewählt")
-        self.assertEqual(got[1]["id"], 1243381, "falscher Film gewählt")
+        self.assertIsNotNone(got, "no candidate picked")
+        self.assertEqual(got[1]["id"], 1243381, "wrong film picked")
 
     def test_picks_the_other_one_for_a_longer_file(self):
         v = self.make("f/Odila.2024.German-GRP.mkv", 10)
@@ -834,14 +834,14 @@ class TestRuntimeTiebreaker(E2EBase):
         self.assertEqual(got[1]["id"], 1038263)
 
     def test_declines_when_two_candidates_are_close(self):
-        """11 min Abstand ist zu wenig — dann soll der Mensch entscheiden."""
+        """An 11 min gap is too little — then a human should decide."""
         v = self.make("f/Odila.2024.German-GRP.mkv", 10)
         v.with_suffix(".nfo").write_text("<movie><runtime>118</runtime></movie>")
         self.assertIsNone(t.by_runtime(self._tmdb(), self.ODILA, v))
 
     def test_title_breaks_the_tie_when_runtimes_collide(self):
-        """Neben 'Odila' (112 min) liegt 'Salve Odila' (111 min): die Laufzeit
-        allein reicht nicht, der Titel muss mitentscheiden."""
+        """Next to 'Odila' (112 min) there is 'Salve Odila' (111 min): runtime
+        alone is not enough, the title has to help decide."""
         cands = self.ODILA + [{"id": 1247597, "title": "Salve Odila",
                                "original_title": "Salve Odila",
                                "release_date": "2024-01-01", "popularity": 2.0}]
@@ -854,11 +854,11 @@ class TestRuntimeTiebreaker(E2EBase):
         v = self.make("f/Odila.2024.German-GRP.mkv", 10)
         v.with_suffix(".nfo").write_text("<movie><runtime>112</runtime></movie>")
         got = t.by_runtime(Fake(), cands, v, "Odila", 2024)
-        self.assertIsNotNone(got, "Titel hätte entscheiden müssen")
+        self.assertIsNotNone(got, "the title should have decided")
         self.assertEqual(got[1]["id"], 1243381)
 
     def test_declines_when_runtime_and_title_both_tie(self):
-        """Zwei Namensvettern gleicher Länge — hier darf nichts geraten werden."""
+        """Two namesakes of the same length — nothing may be guessed here."""
         twins = [
             {"id": 1, "title": "Odila", "original_title": "Odila",
              "release_date": "2024-01-01", "popularity": 3.0},
@@ -875,14 +875,14 @@ class TestRuntimeTiebreaker(E2EBase):
         self.assertIsNone(t.by_runtime(Fake(), twins, v, "Odila", 2024))
 
     def test_declines_without_a_known_duration(self):
-        v = self.make("f/Odila.2024.German-GRP.avi", 10)   # kein Header, keine NFO
+        v = self.make("f/Odila.2024.German-GRP.avi", 10)   # no header, no NFO
         self.assertIsNone(t.by_runtime(self._tmdb(), self.ODILA, v))
 
     def test_reads_real_mkv_header(self):
-        """Echter Matroska-Header: Segment > Info > TimecodeScale + Duration."""
-        def vint(n):                       # Größe als 1-Byte-EBML-Zahl
+        """A real Matroska header: Segment > Info > TimecodeScale + Duration."""
+        def vint(n):                       # size as a 1-byte EBML number
             return bytes([0x80 | n])
-        dur = struct.pack(">d", 112 * 60 * 1000.0)     # ms bei scale 1e6
+        dur = struct.pack(">d", 112 * 60 * 1000.0)     # ms at scale 1e6
         info = (b"\x2a\xd7\xb1" + vint(4) + (1_000_000).to_bytes(4, "big")
                 + b"\x44\x89" + vint(8) + dur)
         segment = b"\x15\x49\xa9\x66" + vint(len(info)) + info
@@ -903,7 +903,7 @@ class TestRuntimeTiebreaker(E2EBase):
         self.assertEqual(t.media_duration(v), 90)
 
     def test_garbage_file_does_not_raise(self):
-        v = self.make("f/Kaputt.mkv", 4096)      # Nullbytes, kein gültiger Header
+        v = self.make("f/Broken.mkv", 4096)      # null bytes, no valid header
         self.assertIsNone(t.media_duration(v))
 
     def test_verify_flags_grossly_wrong_runtime(self):
@@ -946,7 +946,7 @@ class TestRuntimeTiebreaker(E2EBase):
 
 
 class TestSafety(E2EBase):
-    """Zusicherungen, auf die man sich verlassen muss."""
+    """Guarantees one has to be able to rely on."""
 
     def test_dry_run_still_shows_what_would_happen(self):
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-GRP.mkv")
@@ -958,31 +958,31 @@ class TestSafety(E2EBase):
         v = self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-GRP.mkv")
         before = self.names()
         self.run_cli("-n", str(self.tmp))
-        self.assertEqual(before, self.names(), "Trockenlauf hat Dateien verändert")
-        self.assertFalse(t.LOG_FILE.exists(), "Trockenlauf hat ins Undo-Log geschrieben")
+        self.assertEqual(before, self.names(), "dry run changed files")
+        self.assertFalse(t.LOG_FILE.exists(), "dry run wrote to the undo log")
 
     def test_overlong_name_is_truncated(self):
-        """Sonst scheitert das Umbenennen am Dateisystem-Limit."""
+        """Otherwise the rename fails at the file system limit."""
         stem = "A" * 300
         out = t.new_stem(stem, t.build_tag(387))
         self.assertLessEqual(len(out.encode("utf-8")), 200)
 
     def test_sanitize_never_yields_an_empty_name(self):
         for bad in ["..", ".", "   ", "///", "\x00"]:
-            self.assertTrue(t.sanitize(bad), f"leerer Name aus {bad!r}")
+            self.assertTrue(t.sanitize(bad), f"empty name from {bad!r}")
 
     def test_sanitize_cannot_escape_the_directory(self):
-        for bad in ["../../etc/passwd", "a/b", "/absolut"]:
+        for bad in ["../../etc/passwd", "a/b", "/absolute"]:
             self.assertNotIn("/", t.sanitize(bad))
 
     def test_config_file_is_not_world_readable(self):
         t.CONFIG_FILE = self.tmp / "config.json"
         with redirect_stdout(io.StringIO()):
-            t.save_key("geheim123")
+            t.save_key("secret123")
         self.assertEqual(oct(t.CONFIG_FILE.stat().st_mode)[-3:], "600")
 
     def test_key_is_asked_for_on_first_run(self):
-        """Kein Key gespeichert: im Terminal nachfragen (ohne Echo) und ablegen."""
+        """No key stored: ask in the terminal (without echo) and store it."""
         t.CONFIG_FILE = self.tmp / "config.json"
         with mock.patch("getpass.getpass", return_value="  abc123  "), \
                 mock.patch.object(sys.stdin, "isatty", return_value=True), \
@@ -1011,21 +1011,21 @@ class TestSafety(E2EBase):
                 self._saved["load_key"]()
 
     def test_collect_does_not_follow_symlinks_out_of_the_tree(self):
-        outside = self.tmp / "aussen"
+        outside = self.tmp / "outside"
         outside.mkdir()
-        (outside / "Fremd.2000.1080p-GRP.mkv").write_bytes(b"0" * (60 * 1024 * 1024))
+        (outside / "Stranger.2000.1080p-GRP.mkv").write_bytes(b"0" * (60 * 1024 * 1024))
         lib = self.tmp / "lib"
         lib.mkdir()
         try:
             (lib / "link").symlink_to(outside, target_is_directory=True)
         except OSError:
-            self.skipTest("keine Symlinks möglich")
+            self.skipTest("symlinks not supported")
         got = t.collect([str(lib)], 0)
-        self.assertEqual(got, [], f"Symlink verfolgt: {got}")
+        self.assertEqual(got, [], f"symlink followed: {got}")
 
 
 class TestRetag(E2EBase):
-    """Eine getaggte Datei direkt übergeben heißt: neu zuordnen."""
+    """Passing a tagged file directly means: re-identify it."""
 
     def _details(self, movie):
         real = t.Tmdb._get
@@ -1047,7 +1047,7 @@ class TestRetag(E2EBase):
         self.assertEqual(sum("tmdbid" in n for n in got), 1)
 
     def test_same_id_is_a_no_op(self):
-        """Sonst hängt unique_path ein ' (2)' an, obwohl nichts zu tun ist."""
+        """Otherwise unique_path appends ' (2)' although there is nothing to do."""
         v = self.make("f/Overpass.1986.German-GRP [tmdbid-64690].mkv")
         a, b = self._pick_id(64690)
         with self._details({"id": 64690, "title": "Overpass", "runtime": 100}), a, b:
@@ -1055,21 +1055,21 @@ class TestRetag(E2EBase):
         self.assertEqual(self.names(), ["f", "f/Overpass.1986.German-GRP [tmdbid-64690].mkv"])
 
     def test_sidecars_do_not_collect_a_second_tag(self):
-        """Regression: der alte Tag steckte auch im Sidecar-Rest und wurde
-        an den neuen angehängt."""
+        """Regression: the old tag was also in the sidecar rest and got
+        appended to the new one."""
         v = self.make("f/Overpass.1986.German-GRP [tmdbid-1].mkv")
         (v.parent / "Overpass.1986.German-GRP [tmdbid-1].ger.srt").write_text("x")
         a, b = self._pick_id(64690)
         with self._details({"id": 64690, "title": "Overpass", "runtime": 100}), a, b:
             self.run_cli(str(v))
         for n in self.names():
-            self.assertLessEqual(n.count("tmdbid"), 1, f"doppelter Tag: {n}")
+            self.assertLessEqual(n.count("tmdbid"), 1, f"double tag: {n}")
         self.assertIn("f/Overpass.1986.German-GRP [tmdbid-64690].ger.srt", self.names())
 
     def test_folder_scan_leaves_tagged_files_alone(self):
         self.make("f/Overpass.1986.German-GRP [tmdbid-1].mkv")
         with mock.patch("builtins.input",
-                        side_effect=AssertionError("Ordner-Scan hat nachgefragt")):
+                        side_effect=AssertionError("folder scan asked")):
             _, out = self.run_cli(str(self.tmp))
         self.assertIn("Nothing to do", out)
 
@@ -1080,8 +1080,8 @@ class TestRetag(E2EBase):
 
 
 class TestTvHint(E2EBase):
-    """Miniserien haben oft keinen Film-Eintrag — dann darf nicht der
-    ähnlichste Film getaggt werden."""
+    """Miniseries often have no film entry — then the most similar film
+    must not be tagged."""
 
     def test_episode_marker_detected(self):
         for name in ("Glass.Harbor.S01E03.German.1080p.WEB-GRP",
@@ -1094,7 +1094,7 @@ class TestTvHint(E2EBase):
             self.assertFalse(t.is_episode(name), name)
 
     def test_episode_is_never_tagged_as_the_film(self):
-        # "Glass Harbor" gibt es als Film — die Folge darf ihn trotzdem nicht bekommen
+        # "Glass Harbor" exists as a film — the episode still must not get it
         self.make("f/Glass.Harbor.S01E01.German.1080p.WEB.H264-GRP.mkv")
         _, out = self.run_cli(str(self.tmp))
         self.assertIn("shows library", out)
@@ -1136,7 +1136,7 @@ class TestTvHint(E2EBase):
             self.run_cli(str(self.tmp))
         finally:
             t.Tmdb._get = real
-        self.assertNotIn("/search/tv", calls, "unnötige TV-Suche")
+        self.assertNotIn("/search/tv", calls, "needless TV search")
 
 
 class TestDuplicateIds(E2EBase):
@@ -1155,8 +1155,8 @@ class TestDuplicateIds(E2EBase):
 
 
 class TestSidecarArgument(E2EBase):
-    """Im Finder liegen .srt, .nfo und .mkv nebeneinander — wer eine davon
-    übergibt, meint den Film. Sonst würde der Beifänger selbst umbenannt."""
+    """In Finder the .srt, .nfo and .mkv sit side by side — whoever passes one
+    of them means the film. Otherwise the sidecar itself would be renamed."""
 
     def test_sidecar_as_argument_resolves_to_the_video(self):
         v = self.make("f/Der.Leuchtturm.1981.German-GRP.mkv")
@@ -1169,7 +1169,7 @@ class TestSidecarArgument(E2EBase):
         self.assertIn("f/Der.Leuchtturm.1981.German-GRP [tmdbid-387].ger.srt", got)
 
     def test_lone_non_video_is_refused(self):
-        stray = self.tmp / "f" / "notizen.txt"
+        stray = self.tmp / "f" / "notes.txt"
         stray.parent.mkdir(parents=True, exist_ok=True)
         stray.write_text("x")
         buf = io.StringIO()
@@ -1192,7 +1192,7 @@ class TestSidecarArgument(E2EBase):
 
 
 class TestMultiPart(E2EBase):
-    """Ein Film auf zwei Dateien: beide tragen dieselbe ID, zu Recht."""
+    """One film on two files: both rightly carry the same id."""
 
     def test_split_part_recognises_the_usual_forms(self):
         for stem, base, part in [
@@ -1231,7 +1231,7 @@ class TestMultiPart(E2EBase):
 
 
 class TestLanguageSwitch(E2EBase):
-    """Englisch ist Standard, TMDBTAG_LANG=de schaltet zurück."""
+    """English is the default, TMDBTAG_LANG=de switches back."""
 
     def test_default_is_english(self):
         self.make("f/Der.Leuchtturm.1981.German.1080p.BluRay.x264-GRP.mkv")
@@ -1258,10 +1258,10 @@ class TestLanguageSwitch(E2EBase):
         self.assertEqual(lang, "de")
 
     def test_translation_keys_are_reachable(self):
-        """Ein Tippfehler im Schlüssel bliebe sonst unsichtbar: der englische
-        Text fällt einfach durch und die Übersetzung greift nie."""
+        """A typo in a key would otherwise stay invisible: the English text
+        simply falls through and the translation never applies."""
         src = (ROOT / "tmdbtag.py").read_text()
         body = src.split('def _(s: str) -> str:', 1)[1]
         missing = [k for k in t._DE
                    if k.split("{")[0].split("\n")[0][:22].strip() not in body]
-        self.assertEqual(missing, [], f"unerreichbare Uebersetzungen: {missing}")
+        self.assertEqual(missing, [], f"unreachable translations: {missing}")
