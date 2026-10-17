@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.1.0 — 2026-10-17
 
 - Series episodes (`S01E02`, `E02` in the name) are never tagged as a film
   any more. Before, `Some.Show.S01E01` could land on a film of the same
